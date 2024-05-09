@@ -11,7 +11,8 @@ module.exports = {
         'plugin:react/recommended',
         'plugin:@typescript-eslint/recommended',
         // 'airbnb/hooks',
-        'prettier'
+        'prettier',
+        '@react-three/recommended'
     ],
     overrides: [],
     parser: '@typescript-eslint/parser',
@@ -19,7 +20,7 @@ module.exports = {
         ecmaVersion: 'latest',
         sourceType: 'module',
     },
-    plugins: ['react', 'react-hooks', 'react-native', '@typescript-eslint', 'prettier'],
+    plugins: ['react', 'react-hooks', 'react-native', '@typescript-eslint', 'prettier', '@react-three'],
     rules: {
         // indent: ['error', 4],
         'linebreak-style': ['error', 'unix'],
