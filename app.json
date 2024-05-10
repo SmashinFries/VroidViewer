@@ -25,7 +25,10 @@
     },
     "web": {
       "favicon": "./assets/favicon.png",
-      "bundler": "metro",
-    }
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-asset"
+    ]
   }
 }
