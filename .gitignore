@@ -33,3 +33,6 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# vrma motion pack
+assets/animations/motion_pack/*.vrma

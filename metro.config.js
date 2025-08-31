@@ -1,23 +1,16 @@
-// module.exports = {
-//   projectRoot: __dirname,
-//   resolver: {
-//     sourceExts: ['js', 'jsx', 'json', 'ts', 'tsx', 'cjs', 'mjs'],
-//     assetExts: ['db', 'mp3', 'ttf', 'obj', 'vrm', 'fbx', 'mtl', 'png', 'jpg'],
-//   },
-// };
 // Learn more https://docs.expo.io/guides/customizing-metro
 const { getDefaultConfig } = require('expo/metro-config');
 
+/** @type {import('expo/metro-config').MetroConfig} */
 const config = getDefaultConfig(__dirname);
 
-// --- burnt ---
-// config.resolver.sourceExts.push('mjs');
-// config.resolver.sourceExts.push('cjs');
-// --- end burnt ---
+config.resolver.unstable_conditionNames = ['browser', 'require', 'react-native'];
 
 // react-three-fiber
-config.resolver.sourceExts.concat(['js', 'jsx', 'json', 'ts', 'tsx', 'cjs', 'mjs']);
-config.resolver.assetExts.concat(['mp3', 'ttf', 'obj', 'vrm', 'fbx', 'mtl', 'png', 'jpg']);
-config.resolver.assetExts.push('vrm');
+config.resolver.sourceExts.push('js', 'jsx', 'json', 'ts', 'tsx', 'cjs', 'mjs');
+config.resolver.assetExts.push('mp3', 'ttf', 'obj', 'vrm', 'vrma', 'fbx', 'mtl', 'png', 'jpg');
+
+config.transformer.unstable_allowRequireContext = true;
 
 module.exports = config;
+

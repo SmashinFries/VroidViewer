@@ -1,5 +1,4 @@
-import { VRMHumanBoneName } from '@pixiv/three-vrm';
-import { VRM } from '@pixiv/three-vrm/types/VRM';
+import { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
 import {
 	AnimationClip,
 	AnimationMixer,
@@ -87,7 +86,7 @@ export const loadMixamoAnimation = (url: string, vrm: VRM) => {
 		const vrmHipsHeight = Math.abs((vrmHipsY ?? 0) - vrmRootY);
 		const hipsPositionScale = vrmHipsHeight / motionHipsHeight;
 
-		clip.tracks.forEach((track) => {
+		clip?.tracks.forEach((track) => {
 			// Convert each tracks for VRM use, and push to `tracks`
 			const trackSplitted = track.name.split('.');
 			const mixamoRigName = trackSplitted[0];
@@ -146,7 +145,7 @@ export const loadMixamoAnimation = (url: string, vrm: VRM) => {
 			}
 		});
 
-		return new AnimationClip('vrmAnimation', clip.duration, tracks);
+		return new AnimationClip('vrmAnimation', clip?.duration, tracks);
 	});
 };
 
