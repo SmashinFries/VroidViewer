@@ -34,7 +34,12 @@ export const ModalButton = ({
 					<Ionicons name={icon} size={38} />
 				</Pressable>
 			</View>
-			<Modal isVisible={vis} onBackdropPress={() => onToggle(false)}>
+			<Modal
+				animationIn={'fadeIn'}
+				animationOut={'fadeOut'}
+				isVisible={vis}
+				onBackdropPress={() => onToggle(false)}
+			>
 				<View
 					style={[
 						{
