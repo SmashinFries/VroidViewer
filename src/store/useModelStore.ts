@@ -108,7 +108,6 @@ export const useModelStore = create<ModelState & ModelAction>()((set, get) => ({
             });
 
             getVrmThumbnail(gltfVrm.parser, vrm.meta.metaVersion).then((thumbnail) => {
-                console.log(thumbnail);
                 if (thumbnail?.data.localUri) {
                     set({ thumbnail: thumbnail.data.localUri })
                 }
@@ -126,7 +125,7 @@ export const useModelStore = create<ModelState & ModelAction>()((set, get) => ({
             const isSuccess = event.loaded === event.total;
             console.log((100 * (event.loaded / event.total)).toFixed(1) + '%');
             set({ isLoading: !isSuccess, loadProgress: Number((100 * (event.loaded / event.total)).toFixed(0)) })
-        })
+        }, (error) => { console.log(error) })
     },
     loadAnimation: async (name) => {
         const vrm = get().vrm;

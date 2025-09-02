@@ -1,9 +1,9 @@
-import { Button, Text, View } from 'react-native';
+import { Button, Image, Text, View } from 'react-native';
 // import { useProgress } from '@react-three/drei';
 import { useModelStore } from '../store/useModelStore';
 
 export const ModelSelector = () => {
-	const { modelName, isLoading, loadProgress, changeModel } = useModelStore();
+	const { modelName, thumbnail, isLoading, loadProgress, changeModel } = useModelStore();
 	// const { progress } = useProgress();
 	return (
 		<View
@@ -20,6 +20,13 @@ export const ModelSelector = () => {
 			<Text onPress={() => console.log('TEST')} style={{ fontSize: 16, fontWeight: '900' }}>
 				Model Select
 			</Text>
+			{thumbnail && (
+				<Image
+					source={{ uri: thumbnail }}
+					style={{ width: 80, aspectRatio: 1 }}
+					resizeMode="contain"
+				/>
+			)}
 			<Button
 				title="VRM 0"
 				onPress={() => {
