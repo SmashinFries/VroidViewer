@@ -3,12 +3,15 @@ A React Native demo of [three-vrm](https://github.com/pixiv/three-vrm).
 
 ### Platforms
 ✅ Web  
-➖ Android - VRM0 doesn't render properly.  
+➖ Android - VRM0 doesn't render properly. Some VRM1 models render black. 
 ➖ iOS - Not tested.
 
 ## Known Issues
 - VRM0 models only render some of the head on mobile.
-- GLTF loader progress callback doesnt run on mobile.
+- GLTFLoader progress callback is ignored on mobile.
+
+# To-Do
+- Add [WebGPU example](https://github.com/wcandillon/react-native-webgpu)
 
 ## Dev Setup
 1. Clone this repo
