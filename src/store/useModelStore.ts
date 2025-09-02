@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { AnimationMixer, PerspectiveCamera, Scene } from 'three';
 import { GLTFLoader } from 'three-stdlib';
 import { create } from 'zustand';
+import { getVrmThumbnail } from '../utils/vrm';
 
 export const MODELS = {
     vrm0: require('../../assets/models/vrm0.vrm'),
@@ -26,9 +27,10 @@ type ModelSettings = {
     enableEyeLookAt: boolean;
 };
 
-type ModelState = {
+export type ModelState = {
     modelName: ModelName;
     modelUri: string;
+    thumbnail: string | null;
     animationName: AnimName;
     vrm: VRMCore | null;
     mixer: AnimationMixer | null;
@@ -38,7 +40,7 @@ type ModelState = {
     camera: PerspectiveCamera;
 };
 
-type ModelAction = {
+export type ModelAction = {
     changeModel: (name: ModelName) => void;
     loadModel: (uri: string, scene: Scene) => Promise<void>;
     updateModelSettings: (params: Partial<ModelSettings>) => void;
@@ -48,6 +50,7 @@ type ModelAction = {
 export const useModelStore = create<ModelState & ModelAction>()((set, get) => ({
     modelName: 'vrm1',
     modelUri: MODELS.vrm1,
+    thumbnail: null,
     vrm: null,
     mixer: null,
     animationName: 'idle',
@@ -66,8 +69,7 @@ export const useModelStore = create<ModelState & ModelAction>()((set, get) => ({
         set((state) => ({ ...state, settings: { ...state.settings, ...params } }))
     },
     changeModel: (name) => {
-        console.log('Changing model to', name);
-        set({ modelName: name, modelUri: MODELS[name], })
+        set({ modelName: name, modelUri: MODELS[name], thumbnail: null })
     },
     loadModel: async (uri: string, scene: Scene) => {
         const currentVrm = get().vrm;
@@ -104,6 +106,13 @@ export const useModelStore = create<ModelState & ModelAction>()((set, get) => ({
             vrm.scene.traverse((obj) => {
                 obj.frustumCulled = false;
             });
+
+            getVrmThumbnail(gltfVrm.parser, vrm.meta.metaVersion).then((thumbnail) => {
+                console.log(thumbnail);
+                if (thumbnail?.data.localUri) {
+                    set({ thumbnail: thumbnail.data.localUri })
+                }
+            })
 
             scene.add(vrm.scene);
             set({ vrm })
