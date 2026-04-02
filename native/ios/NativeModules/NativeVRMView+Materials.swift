@@ -93,7 +93,15 @@ extension NativeVRMView {
                     
                     // Map Base Texture if available
                     if let pbr = mat as? PhysicallyBasedMaterial {
-                        customMat.baseColor.texture = pbr.baseColor.texture
+                        if let pbrTex = pbr.baseColor.texture {
+                            let resource = pbrTex.resource
+                            let customTex = CustomMaterial.Texture(resource)
+                            // Note: CustomMaterial.Texture in RealityKit doesn't expose sampler or tint configuration.
+                            // We can only pass through the texture resource here.
+                            customMat.baseColor.texture = customTex
+                        } else {
+                            customMat.baseColor.texture = nil
+                        }
                         customMat.opacityThreshold = pbr.opacityThreshold
                     }
                     
