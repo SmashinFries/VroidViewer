@@ -4,12 +4,11 @@
     "slug": "VroidViewer",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/VroidViewer.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
+      "image": "./assets/Vroid.png",
       "backgroundColor": "#ffffff"
     },
     "assetBundlePatterns": [
@@ -25,17 +24,18 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/VroidViewer.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.dedicatus.VroidViewer"
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/VroidViewer.png",
       "bundler": "metro"
     },
     "plugins": [
-      "expo-asset"
+      "expo-asset",
+      "./plugins/withNativeRestore"
     ]
   }
 }

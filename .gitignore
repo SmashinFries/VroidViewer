@@ -9,8 +9,8 @@ dist/
 web-build/
 .idea
 .vscode/
-android
-ios
+/android/
+/ios/
 
 # Native
 *.orig.*

@@ -14,7 +14,6 @@ import { loadMixamoAnimation } from '../utils/animation';
 import * as THREE from 'three';
 import { HeadTracker } from '../utils/headTracker';
 import { applyModelPartsVisibility, extractModelParts } from '../utils/modelParts';
-import { resolve } from '@react-three/fiber/dist/declarations/src/core/utils';
 import {
 	CustomModelInfo,
 	deleteCustomModelInfo,
@@ -24,8 +23,9 @@ import {
 import * as DocumentPicker from 'expo-document-picker';
 
 export const MODELS = {
-	vrm0: require('../../assets/models/vrm0.vrm'),
-	vrm1: require('../../assets/models/vrm1.vrm'),
+	cheongsam: require('../../assets/models/cheongsam.vrm'),
+	vrm0: require('../../assets/models/vrm0.glb'),
+	vrm1: require('../../assets/models/vrm1.glb'),
 	Sonya: require('../../assets/models/Sonya_Sinclair.vrm'),
 	custom: 'custom',
 };
@@ -495,6 +495,9 @@ export const useModelStore = create<ModelState & ModelAction>()((set, get) => ({
 				throw new Error('No VRM data found in loaded file');
 			}
 
+			// Keep model hidden until isLoading is false.
+			vrm.scene.visible = false;
+
 			// Optimization
 			VRMUtils.removeUnnecessaryVertices(gltfVrm.scene);
 			VRMUtils.combineSkeletons(gltfVrm.scene);
@@ -573,7 +576,11 @@ export const useModelStore = create<ModelState & ModelAction>()((set, get) => ({
 				isLoading: false,
 				loadProgress: 100,
 				restPose,
+				isModelVisible: true,
 			});
+
+			// Finally show the model.
+			vrm.scene.visible = true;
 
 			const modelParts = extractModelParts(vrm, { includeAll: get().showAllParts });
 			set({ modelParts });

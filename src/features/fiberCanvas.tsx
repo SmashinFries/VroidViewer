@@ -1,11 +1,12 @@
 import { Grid } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Platform, TouchableOpacity, Text } from 'react-native';
+import { View, StyleSheet, Platform, TouchableOpacity, Text, StatusBar } from 'react-native';
 import { Vector3 } from 'three';
 import { BRIDGE_BONES, useModelStore } from '../store/useModelStore';
 import { ModelSelector } from '../components/selector';
 import useControls from 'r3f-native-orbitcontrols';
+import LottieView from '../components/LottieView';
 import { MenusContainer } from '../components/menus';
 import * as THREE from 'three';
 import { NativeVroidView, NativeVroidViewHandle } from '../components/NativeVroidView';
@@ -79,7 +80,11 @@ const Model = () => {
 	return null;
 };
 
-export const FiberCanvas = () => {
+interface FiberCanvasProps {
+	onPreviewPress: () => void;
+}
+
+export const FiberCanvas: React.FC<FiberCanvasProps> = ({ onPreviewPress }) => {
 	const [OrbitControls, events] = useControls();
 	const modelUri = useModelStore((state) => state.modelUri);
 	const camera = useModelStore((state) => state.camera);
@@ -88,7 +93,9 @@ export const FiberCanvas = () => {
 	const isModelVisible = useModelStore((state) => state.isModelVisible);
 	const settings = useModelStore((state) => state.settings);
 
-	const [useNative, setUseNative] = useState(Platform.OS === 'ios');
+	const isLoading = useModelStore((state) => state.isLoading);
+
+	const [useNative, setUseNative] = useState(Platform.OS === 'ios'|| Platform.OS === 'android');
 	const [nativeUri, setNativeUri] = useState<string | null>(null);
 	const [currentExpressions, setCurrentExpressions] = useState<Record<string, number>>({});
 	const [currentRotations, setCurrentRotations] = useState<
@@ -220,8 +227,8 @@ export const FiberCanvas = () => {
 					setCurrentRotations(rotations);
 				}
 
-				// Android optimization
-				if (Platform.OS === 'android' && nativeViewRef.current?.setNativeProps) {
+				// Direct bridge dispatch optimization for continuous property streams
+				if (nativeViewRef.current?.setNativeProps) {
 					nativeViewRef.current.setNativeProps({
 						expressions: exprs,
 						boneRotations: rotations
@@ -306,10 +313,13 @@ export const FiberCanvas = () => {
 	};
 
 	return (
-		<View style={{ flex: 1 }}>
-			<View {...events} style={{ flex: 1 }}>
-				<Canvas
-					onCreated={({ gl, camera }) => {
+		<View style={{ flex: 1, backgroundColor: '#6ad6f0' }}>
+			<StatusBar barStyle="dark-content" />
+			
+			{(!useNative || Platform.OS === 'web') && (
+				<View {...events} style={{ flex: 1 }}>
+					<Canvas
+						onCreated={({ gl, camera }) => {
 						if (Platform.OS === 'ios' || Platform.OS === 'android') {
 							console.log('Configuring WebGL for native mobile build');
 
@@ -366,15 +376,13 @@ export const FiberCanvas = () => {
 						gl.setClearColor(sceneColor);
 					}}
 					gl={{
-						antialias: true,
+						antialias: Platform.OS === 'web',
 						alpha: true,
 						powerPreference: "high-performance",
-						preserveDrawingBuffer: false,
-						failIfMajorPerformanceCaveat: false,
+						preserveDrawingBuffer: Platform.OS === 'web',
 						...(Platform.OS !== 'web' && {
 							stencil: true,
 							depth: true,
-							logarithmicDepthBuffer: false,
 							precision: 'highp',
 						}),
 					}}
@@ -387,6 +395,7 @@ export const FiberCanvas = () => {
 						{!useNative && <Model />}
 					</Suspense>
 					<Grid />
+
 					{/* Only use JS OrbitControls if not using Native */}
 					{!useNative && (
 						<OrbitControls
@@ -409,12 +418,13 @@ export const FiberCanvas = () => {
 							panSpeed={1}
 						/>
 					)}
-				</Canvas>
-			</View>
+					</Canvas>
+				</View>
+			)}
 
 			{/* 2. Native Character Layer (Overlay) */}
-			{useNative && (Platform.OS === 'ios' || Platform.OS === 'android')&& (
-				<View {...handlers} style={StyleSheet.absoluteFill}>
+			{useNative && (Platform.OS === 'ios' || Platform.OS === 'android') && (
+				<View style={StyleSheet.absoluteFill}>
 					<NativeVroidView
 						ref={nativeViewRef}
 						style={StyleSheet.absoluteFill}
@@ -454,9 +464,36 @@ export const FiberCanvas = () => {
 						</Text>
 					</TouchableOpacity>
 				)}
+				{(Platform.OS === 'android') && (
+					<TouchableOpacity
+						style={[styles.rendererToggle, useNative && styles.rendererToggleActive]}
+						onPress={() => setUseNative(!useNative)}
+					>
+						<MaterialCommunityIcons
+							name={useNative ? 'android' : 'android'}
+							size={20}
+							color={useNative ? '#fff' : '#2d3748'}
+						/>
+						<Text style={[styles.toggleText, useNative && styles.toggleTextActive]}>
+							{useNative ? 'Native' : 'JS'}
+						</Text>
+					</TouchableOpacity>
+				)}
 			</View>
 
-			<MenusContainer />
+			{/* Loader overlay */}
+			{isLoading && (
+				<View style={styles.loadingContainer} pointerEvents="none">
+					<LottieView
+						source={require('../../assets/lotties/loading.json')}
+						autoPlay
+						loop
+						style={styles.loading}
+					/>
+				</View>
+			)}
+
+			<MenusContainer onPreviewPress={onPreviewPress} />
 			<ModelSelector />
 		</View>
 	);
@@ -477,7 +514,7 @@ const styles = StyleSheet.create({
 		justifyContent: 'center',
 		alignItems: 'center',
 		left: '25%',
-		top: Platform.OS === 'ios' ? 58 : 20,
+		top: 58,
 		right: '25%',
 		flexDirection: 'row',
 		zIndex: 1000,
@@ -491,7 +528,10 @@ const styles = StyleSheet.create({
 		borderRadius: 20,
 		gap: 6,
 		shadowColor: '#000',
-		shadowOffset: { width: 0, height: 2 },
+		shadowOffset: {
+			width: 0,
+			height: 2
+		},
 		shadowOpacity: 0.1,
 		shadowRadius: 4,
 		elevation: 3,
