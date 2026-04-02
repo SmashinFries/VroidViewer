@@ -3,9 +3,112 @@ A React Native demo of [three-vrm](https://github.com/pixiv/three-vrm).
 
 ### Platforms
 ✅ Web  
-➖ Android and iOS - See the below issues.
+✅ Android (native renderer via Filament + gltfio, Android 12+)
+✅ iOS (native renderer via VRMKit + RealityKit, iOS 18+)
 
-## Android
+### Credits
+- VRMKit by @tattn: https://github.com/tattn/VRMKit
+
+### Why VRMKit
+VRMKit provides a native loader and renderer for VRM on Apple platforms. We use it to render on iOS with RealityKit while keeping the Three.js pipeline for web and as the source of animation data.
+
+Current VRMKit version: **0.7.1** (Swift Package Manager).
+
+## How iOS Rendering Works
+The native renderer lives in:
+- `ios/NativeModules/NativeVRMView.swift`
+- `ios/NativeModules/NativeVRMViewManager.swift`
+- `ios/NativeModules/NativeVRMViewManager.m`
+
+### Model Loading Flow
+1. **VRM 0.x**
+    - Load via `VRMLoader().load(withData:)`.
+    - Build a `VRMEntity` with `VRMEntityLoader`.
+
+2. **VRM 1.x** (temporary shim)
+    - VRMKit 0.7.1 lacks a full VRM 1.x RealityKit loader.
+    - We inject a minimal **VRM 0.x extension** into the GLB JSON and map:
+        - `VRMC_vrm.humanoid` → `VRM.humanoid.humanBones`
+        - `VRMC_vrm.expressions` → `VRM.blendShapeMaster`
+        - `KHR_materials_unlit` → minimal `VRM.materialProperties` (for proper unlit hair/materials)
+    - We also patch missing optional VRM 1.x fields (e.g. `firstPerson.meshAnnotations`, `expressions.preset.*`, spring bone joint fields) to prevent decoding failures.
+
+### Orientation Rules
+- VRM 0.x models are rotated `180°` on Y to match the JS pipeline (`VRMUtils.rotateVRM0`).
+- VRM 1.x models are not rotated.
+
+## How Android Rendering Works
+The native renderer lives in:
+- `android/app/src/main/java/com/dedicatus/VroidViewer/vrm/NativeVrmView.kt`
+- `android/app/src/main/java/com/dedicatus/VroidViewer/vrm/NativeVrmViewManager.kt`
+- `android/app/src/main/java/com/dedicatus/VroidViewer/vrm/NativeVrmPackage.kt`
+
+### Rendering Stack
+- Uses **Filament + gltfio** to load and render GLB/VRM assets.
+- Renders into a transparent `TextureView` using `UiHelper` + `SwapChain`.
+- A `Choreographer` callback drives the render loop.
+
+### Model Loading + VRM Mapping
+- `modelUri` supports `content://`, `file://`, and absolute paths (content URIs are copied to cache first).
+- The GLB is loaded as a `FilamentAsset`, resources are resolved via `ResourceLoader`, and entities are cached.
+- A humanoid bone map is parsed directly from the GLB JSON:
+    - `extensions.VRM.humanoid.humanBones` (VRM 0.x)
+    - `extensions.VRMC_vrm.humanoid.humanBones` (VRM 1.x)
+- Rest transforms are cached so bone rotations can be applied as deltas.
+
+### Expressions (Morph Targets)
+- The `expressions` prop maps to morph targets by name (best‑effort matching).
+- We set morph weights across renderables with `RenderableManager.setMorphWeights`.
+
+### Bone Rotations
+- The `boneRotations` prop contains per‑bone quaternions from JS.
+- We apply deltas on top of each bone’s rest transform (local space).
+- VRM 0.x mirrors X/Z to match the JS `VRMUtils.rotateVRM0` orientation.
+
+### Camera + Controls
+- Orbit‑style camera (rotate + pinch‑to‑zoom) with damping.
+- Zoom and angle limits are configurable via props from `NativeVroidView`.
+
+### Material Fixups
+- Eye materials are forced double‑sided and culling is disabled to avoid clipping.
+
+### JS Integration
+- React Native wrapper: `src/components/NativeVroidView.tsx`
+- Usage + prop wiring: `src/features/fiberCanvas.tsx`
+- Animations still run in JS; Android receives per‑frame `expressions` + `boneRotations`.
+
+## JS → Native Bridge (Temporary Animation Support)
+VRMKit doesn’t yet support **VRMA** or **FBX** animation playback on iOS.  
+To keep animation parity, we drive animation in JS and stream bone + expression data to native each frame.
+
+### Data Flow
+1. **JS animation playback**
+    - We use `three-vrm` + `three-vrm-animation` in `src/store/useModelStore.ts`.
+    - Animations (VRMA/FBX/Mixamo) play on the JS VRM model.
+
+2. **Per‑frame sync loop**
+    - `src/features/fiberCanvas.tsx` runs a `requestAnimationFrame` loop.
+    - On each tick:
+        - `useModelStore.updateAnimationFrame(delta)` advances the JS animation mixer.
+        - Expression weights are read from `vrm.expressionManager`.
+        - Bone quaternions are read from `vrm.humanoid.getNormalizedBoneNode(...)`.
+    - Those values are passed to `<NativeVroidView />` as props:
+        - `expressions`
+        - `boneRotations`
+
+3. **Native application**
+    - `NativeVRMView` applies:
+        - Expressions using `vrm.setBlendShape(...)`
+        - Bone rotations via `vrm.humanoid.node(for:)`
+    - RealityKit skinning + spring bones are updated each frame using `SceneEvents.Update`.
+
+---
+
+## Known Issues when using directly pixiv/three-vrm to render the models
+
+➖ See the below issues while using pixiv/three-vrm directly on iOS and Android.
+
+### Android
 - You can see the result on an Android Emulator:
   
   <img src="./assets/images/Android_emulator.png" width="300"/>
@@ -37,14 +140,6 @@ The model is also rendered correctly for **VRM1_Constraint_Twist_Sample.vrm**
 
 - For some reasons, the max texture size on iOS Simulator are "4096", and causes the model to display only after a while or not display at all
 
-## Known Mobile Issues
-- As you may have seen, The model **VRM1_Constraint_Twist_Sample** (named vrm1.vrm in this project) is the only model that renders correctly
-- The other models are lacking texture
-- GLTFLoader progress callback is ignored on mobile.
-
-# To-Do
-- Add [WebGPU example](https://github.com/wcandillon/react-native-webgpu)
-
 ## Dev Setup
 1. Clone this repo
 2. Run `bun i` in main directory
@@ -67,6 +162,8 @@ If you want to test the more animations, you can:
 
 This works with Expo Go 53, so building isn't required.
 
+---
 
-If you wanna test on Expo Go for iOS, you'll need to update the package and migrate to expo SDK 54
+## IMPORTANT NOTE
+The NativeVRMView component doesn't work in Expo Go as it requires a native build.
 

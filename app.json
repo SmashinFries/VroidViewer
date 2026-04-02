@@ -17,7 +17,11 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.dedicatus.VroidViewer"
+      "bundleIdentifier": "com.dedicatus.VroidViewer",
+	  "infoPlist": {
+		  "NSPhotoLibraryAddUsageDescription": "This app needs permission to save custom thumbnails.",
+		  "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to select a custom thumbnail."
+	  }
     },
     "android": {
       "adaptiveIcon": {

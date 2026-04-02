@@ -1,9 +1,6 @@
-import { Button, Pressable, Text, View } from 'react-native';
+import { Text } from 'react-native';
 import { useModelStore } from '../../store/useModelStore';
-import { useState } from 'react';
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { VRMMeta } from '@pixiv/three-vrm';
-import Modal from 'react-native-modal';
 import { ModalButton } from '../modal';
 import { useModal } from '../../hooks/useModal';
 
