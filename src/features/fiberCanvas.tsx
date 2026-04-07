@@ -202,7 +202,8 @@ export const FiberCanvas: React.FC<FiberCanvasProps> = ({ onPreviewPress }) => {
 				const rotations: Record<string, { x: number; y: number; z: number; w: number }> =
 					{};
 				BRIDGE_BONES.forEach((name) => {
-					const bone = vrm.humanoid?.getRawBoneNode(name as any);
+					// Use normalized bones for animations (Mixamo/VRMA)
+					const bone = vrm.humanoid?.getNormalizedBoneNode(name as any) || vrm.humanoid?.getRawBoneNode(name as any);
 					if (bone) {
 						const rest = restPoseRef.current?.[name];
 						if (rest) {
@@ -437,7 +438,7 @@ export const FiberCanvas: React.FC<FiberCanvasProps> = ({ onPreviewPress }) => {
 						enableEyeLookAt={settings.enableEyeLookAt}
 						minZoom={1.2}
 						maxZoom={4.0}
-						initialZoom={3.0}
+						initialZoom={3.5}
 						minPolarAngle={Math.PI * 0.1}
 						maxPolarAngle={Math.PI * 0.75}
 						minAzimuthAngle={-Math.PI * 0.5}

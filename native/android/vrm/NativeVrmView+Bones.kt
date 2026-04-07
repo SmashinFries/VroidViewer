@@ -1,15 +1,67 @@
 package com.dedicatus.VroidViewer.vrm
 
-import com.google.android.filament.utils.Quaternion
+import android.util.Log
+import com.facebook.react.bridge.ReadableMapKeySetIterator
+import dev.romainguy.kotlin.math.Float3
+import dev.romainguy.kotlin.math.Quaternion
+import kotlin.math.min
+import com.google.android.filament.*
 
 /**
- * Bone and Transformation logic for NativeVrmView
+ * Bone Rotations and Expressions for NativeVrmView
  */
 
-fun NativeVrmView.applyBoneRotations() {
+internal fun NativeVrmView.applyExpressions() {
+    val model = asset ?: return
+    val expressions = pendingExpressions ?: return
+    if (renderableEntities.isEmpty()) return
+
+    // Reset morph weights
+    for (renderableIndex in renderableEntities.indices) {
+        val weights = morphWeightsByRenderable[renderableIndex]
+        for (i in weights.indices) weights[i] = 0f
+    }
+
+    val iterator: ReadableMapKeySetIterator = expressions.keySetIterator()
+    while (iterator.hasNextKey()) {
+        val key = iterator.nextKey()
+        val weight = expressions.getDouble(key).toFloat()
+        val lowerKey = key.lowercase()
+        
+        if (nativeLipSyncEnabled && visemeMappings.containsKey(lowerKey)) {
+            continue
+        }
+        
+        val possibleNames = expressionMapping[lowerKey] ?: listOf(lowerKey)
+
+        for (renderableIndex in renderableEntities.indices) {
+            val names = morphTargetNamesByRenderable[renderableIndex]
+            val weights = morphWeightsByRenderable[renderableIndex]
+            val limit = min(names.size, weights.size)
+            for (i in 0 until limit) {
+                val targetNameLower = names[i].lowercase()
+                
+                if (possibleNames.any { targetNameLower.contains(it.lowercase()) }) {
+                    weights[i] = weight
+                }
+            }
+        }
+    }
+
+    for (renderableIndex in renderableEntities.indices) {
+        val entity = renderableEntities[renderableIndex]
+        val rm = renderableManager ?: continue
+        val instance = rm.getInstance(entity)
+        val weights = morphWeightsByRenderable[renderableIndex]
+        rm.setMorphWeights(instance, weights, 0)
+    }
+}
+
+internal fun NativeVrmView.applyBoneRotations() {
     val rotations = pendingBoneRotations ?: return
     val iterator = rotations.keySetIterator()
-    transformManager.openLocalTransformTransaction()
+    val tm = transformManager ?: return
+    tm.openLocalTransformTransaction()
     while (iterator.hasNextKey()) {
         val boneName = iterator.nextKey()
         val quatMap = rotations.getMap(boneName) ?: continue
@@ -18,22 +70,53 @@ fun NativeVrmView.applyBoneRotations() {
         val z = quatMap.getDouble("z").toFloat()
         val w = quatMap.getDouble("w").toFloat()
         val entity = findBoneEntity(boneName) ?: continue
-        val instance = transformManager.getInstance(entity)
+        val instance = tm.getInstance(entity)
         val rest = restTransforms[entity]
+        
         val delta = Quaternion(x, y, z, w)
-        val deltaMat = toColumnMajor(delta.toMatrix().toFloatArray())
+        // delta.toMatrix() is a Mat4 which is already column-major.
+        // We defined a custom toMatrixFloatArray that doesn't transpose.
+        val deltaMat = toMatrixFloatArray(delta)
+        
         // Apply delta in local space: rest * delta
         val result = if (rest != null) multiplyMat4(rest, deltaMat) else deltaMat
-        transformManager.setTransform(instance, result)
+        tm.setTransform(instance, result)
     }
-    transformManager.commitLocalTransformTransaction()
-    instance?.animator?.updateBoneMatrices()
+    tm.commitLocalTransformTransaction()
+    this.instance?.animator?.updateBoneMatrices()
 }
 
-fun NativeVrmView.findBoneEntity(name: String): Int? {
+internal fun NativeVrmView.applyHiddenMeshes() {
+    if (renderableEntities.isEmpty()) return
+    
+    // Clear previously hidden renderables
+    if (hiddenRenderables.isNotEmpty()) {
+        val s = scene ?: return
+        for (entity in hiddenRenderables) {
+            s.addEntity(entity)
+        }
+        hiddenRenderables.clear()
+    }
+
+    if (hiddenMeshNames.isEmpty()) return
+
+    for (name in hiddenMeshNames) {
+        val key = wardrobeKey(name)
+        if (key.isBlank()) continue
+        val entities = renderableNameIndex[key] ?: continue
+        for (entity in entities) {
+            if (hiddenRenderables.contains(entity)) continue
+            scene?.removeEntity(entity)
+            hiddenRenderables.add(entity)
+        }
+    }
+}
+
+internal fun NativeVrmView.findBoneEntity(name: String): Int? {
     val lowerName = name.lowercase()
     vrmBoneEntityOverrides[lowerName]?.let { return it }
     boneEntities[lowerName]?.let { return it }
+    
     fallbackBonePatterns[lowerName]?.let { patterns ->
         for ((cachedName, entity) in boneEntities) {
             if (patterns.any { cachedName.contains(it) }) {
@@ -41,93 +124,93 @@ fun NativeVrmView.findBoneEntity(name: String): Int? {
             }
         }
     }
+    
     for ((cachedName, entity) in boneEntities) {
         if (cachedName.contains(lowerName)) return entity
     }
     return null
 }
 
+// Matrix multiplication for Column-Major FloatArrays (16 floats)
 internal fun NativeVrmView.multiplyMat4(a: FloatArray, b: FloatArray): FloatArray {
     val result = FloatArray(16)
-    var row = 0
-    while (row < 4) {
-        var col = 0
-        while (col < 4) {
+    for (row in 0..3) {
+        for (col in 0..3) {
             var sum = 0f
-            var i = 0
-            while (i < 4) {
+            for (i in 0..3) {
+                // Column-major indexing: [row + col * 4]
                 sum += a[row + i * 4] * b[i + col * 4]
-                i++
             }
             result[row + col * 4] = sum
-            col++
         }
-        row++
     }
     return result
 }
 
-internal fun NativeVrmView.toColumnMajor(rowMajor: FloatArray): FloatArray {
-    if (rowMajor.size != 16) return rowMajor
+// Convert dev.romainguy.kotlin.math.Quaternion to a Column-Major FloatArray
+internal fun NativeVrmView.toMatrixFloatArray(q: Quaternion): FloatArray {
+    val m = q.toMatrix()
     return floatArrayOf(
-        rowMajor[0], rowMajor[4], rowMajor[8], rowMajor[12],
-        rowMajor[1], rowMajor[5], rowMajor[9], rowMajor[13],
-        rowMajor[2], rowMajor[6], rowMajor[10], rowMajor[14],
-        rowMajor[3], rowMajor[7], rowMajor[11], rowMajor[15]
+        m.x.x, m.x.y, m.x.z, m.x.w,
+        m.y.x, m.y.y, m.y.z, m.y.w,
+        m.z.x, m.z.y, m.z.z, m.z.w,
+        m.w.x, m.w.y, m.w.z, m.w.w
     )
 }
 
-internal val fallbackBonePatterns: Map<String, List<String>> = mapOf(
-    "hips" to listOf("hips", "pelvis"),
-    "spine" to listOf("spine"),
-    "chest" to listOf("chest"),
-    "upperchest" to listOf("upperchest", "upper_chest"),
-    "neck" to listOf("neck"),
-    "head" to listOf("head"),
-    "lefteye" to listOf("lefteye", "eye_l", "eye.l"),
-    "righteye" to listOf("righteye", "eye_r", "eye.r"),
-    "leftshoulder" to listOf("leftshoulder", "shoulder_l"),
-    "rightshoulder" to listOf("rightshoulder", "shoulder_r"),
-    "leftupperarm" to listOf("_l_upperarm", "leftupperarm", "upperarm_l"),
-    "rightupperarm" to listOf("_r_upperarm", "rightupperarm", "upperarm_r"),
-    "leftlowerarm" to listOf("_l_lowerarm", "leftlowerarm", "lowerarm_l"),
-    "rightlowerarm" to listOf("_r_lowerarm", "rightlowerarm", "lowerarm_r"),
-    "lefthand" to listOf("_l_hand", "lefthand", "hand_l"),
-    "righthand" to listOf("_r_hand", "righthand", "hand_r"),
-    "leftthumbmetacarpal" to listOf("leftthumbmetacarpal", "l_thumb1", "thumb1_l", "thumb_01_l"),
-    "leftthumbproximal" to listOf("leftthumbproximal", "l_thumb2", "thumb2_l", "thumb_02_l"),
-    "leftthumbdistal" to listOf("leftthumbdistal", "l_thumb3", "thumb3_l", "thumb_03_l"),
-    "leftindexproximal" to listOf("leftindexproximal", "l_index1", "index1_l", "index_01_l"),
-    "leftindexintermediate" to listOf("leftindexintermediate", "l_index2", "index2_l", "index_02_l"),
-    "leftindexdistal" to listOf("leftindexdistal", "l_index3", "index3_l", "index_03_l"),
-    "leftmiddleproximal" to listOf("leftmiddleproximal", "l_middle1", "middle1_l", "middle_01_l"),
-    "leftmiddleintermediate" to listOf("leftmiddleintermediate", "l_middle2", "middle2_l", "middle_02_l"),
-    "leftmiddledistal" to listOf("leftmiddledistal", "l_middle3", "middle3_l", "middle_03_l"),
-    "leftringproximal" to listOf("leftringproximal", "l_ring1", "ring1_l", "ring_01_l"),
-    "leftringintermediate" to listOf("leftringintermediate", "l_ring2", "ring2_l", "ring_02_l"),
-    "leftringdistal" to listOf("leftringdistal", "l_ring3", "ring3_l", "ring_03_l"),
-    "leftlittleproximal" to listOf("leftlittleproximal", "leftpinkyproximal", "l_pinky1", "pinky1_l", "little1_l", "little_01_l"),
-    "leftlittleintermediate" to listOf("leftlittleintermediate", "leftpinkyintermediate", "l_pinky2", "pinky2_l", "little2_l", "little_02_l"),
-    "leftlittledistal" to listOf("leftlittledistal", "leftpinkydistal", "l_pinky3", "pinky3_l", "little3_l", "little_03_l"),
-    "rightthumbmetacarpal" to listOf("rightthumbmetacarpal", "r_thumb1", "thumb1_r", "thumb_01_r"),
-    "rightthumbproximal" to listOf("rightthumbproximal", "r_thumb2", "thumb2_r", "thumb_02_r"),
-    "rightthumbdistal" to listOf("rightthumbdistal", "r_thumb3", "thumb3_r", "thumb_03_r"),
-    "rightindexproximal" to listOf("rightindexproximal", "r_index1", "index1_r", "index_01_r"),
-    "rightindexintermediate" to listOf("rightindexintermediate", "r_index2", "index2_r", "index_02_r"),
-    "rightindexdistal" to listOf("rightindexdistal", "r_index3", "index3_r", "index_03_r"),
-    "rightmiddleproximal" to listOf("rightmiddleproximal", "r_middle1", "middle1_r", "middle_01_r"),
-    "rightmiddleintermediate" to listOf("rightmiddleintermediate", "r_middle2", "middle2_r", "middle_02_r"),
-    "rightmiddledistal" to listOf("rightmiddledistal", "r_middle3", "middle3_r", "middle_03_r"),
-    "rightringproximal" to listOf("rightringproximal", "r_ring1", "ring1_r", "ring_01_r"),
-    "rightringintermediate" to listOf("rightringintermediate", "r_ring2", "ring2_r", "ring_02_r"),
-    "rightringdistal" to listOf("rightringdistal", "r_ring3", "ring3_r", "ring_03_r"),
-    "rightlittleproximal" to listOf("rightlittleproximal", "rightpinkyproximal", "r_pinky1", "pinky1_r", "little1_r", "little_01_r"),
-    "rightlittleintermediate" to listOf("rightlittleintermediate", "rightpinkyintermediate", "r_pinky2", "pinky2_r", "little2_r", "little_02_r"),
-    "rightlittledistal" to listOf("rightlittledistal", "rightpinkydistal", "r_pinky3", "pinky3_r", "little3_r", "little_03_r"),
-    "leftupperleg" to listOf("_l_upperleg", "leftupperleg", "upperleg_l"),
-    "rightupperleg" to listOf("_r_upperleg", "rightupperleg", "upperleg_r"),
-    "leftlowerleg" to listOf("_l_lowerleg", "leftlowerleg", "lowerleg_l"),
-    "rightlowerleg" to listOf("_r_lowerleg", "rightlowerleg", "lowerleg_r"),
-    "leftfoot" to listOf("_l_foot", "leftfoot", "foot_l"),
-    "rightfoot" to listOf("_r_foot", "rightfoot", "foot_r"),
-)
+internal fun NativeVrmView.applyLookAt() {
+    // Look-at implementation using bone entities
+    val headEntity = boneEntities["head"] ?: return
+    val headPos = worldPositionOf(headEntity) ?: return
+
+    // Target relative to head
+    val dx = orbitTarget[0] - headPos[0]
+    val dy = orbitTarget[1] - headPos[1]
+    val dz = orbitTarget[2] - headPos[2]
+
+    val yaw = Math.atan2(dx.toDouble(), dz.toDouble()).toFloat()
+    val pitch = Math.atan2(-dy.toDouble(), Math.sqrt((dx * dx + dz * dz).toDouble())).toFloat()
+
+    var yawDeg = (yaw * 180f / Math.PI.toFloat())
+    var pitchDeg = (pitch * 180f / Math.PI.toFloat())
+
+    // Normalize yaw to [-180, 180]
+    while (yawDeg > 180f) yawDeg -= 360f
+    while (yawDeg < -180f) yawDeg += 360f
+
+    if (vrmVersion.startsWith("0")) {
+        yawDeg = -yawDeg
+    }
+
+    // Basic smoothing and application
+    setBoneRotationDeg(headEntity, pitchDeg * 0.3f, yawDeg * 0.4f, 0f)
+    findBoneEntity("neck")?.let {
+        setBoneRotationDeg(it, pitchDeg * 0.1f, yawDeg * 0.1f, 0f)
+    }
+}
+
+internal fun NativeVrmView.setBoneRotationDeg(entity: Int, pitch: Float, yaw: Float, roll: Float) {
+    val tm = transformManager ?: return
+    val instance = tm.getInstance(entity)
+    if (instance == 0) return
+
+    val p = (pitch * Math.PI / 180.0).toFloat()
+    val y = (yaw * Math.PI / 180.0).toFloat()
+    val r = (roll * Math.PI / 180.0).toFloat()
+
+    val q = Quaternion.fromEuler(Float3(p, y, r))
+    val deltaMat = toMatrixFloatArray(q)
+    val rest = restTransforms[entity]
+
+    val result = if (rest != null) multiplyMat4(rest, deltaMat) else deltaMat
+    tm.setTransform(instance, result)
+}
+
+internal fun NativeVrmView.worldPositionOf(entity: Int): FloatArray? {
+    val tm = transformManager ?: return null
+    if (!tm.hasComponent(entity)) return null
+    val instance = tm.getInstance(entity)
+    val matrix = FloatArray(16)
+    tm.getWorldTransform(instance, matrix)
+    return floatArrayOf(matrix[12], matrix[13], matrix[14])
+}

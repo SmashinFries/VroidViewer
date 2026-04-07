@@ -301,6 +301,40 @@ enum VRMShimUtils {
         add("rightFoot",     b.rightFoot.node)
         addOpt("rightToes",  b.rightToes)
 
+        // --- Fingers ---
+        
+        // Left Hand
+        addOpt("leftThumbProximal",      b.leftThumbProximal)
+        addOpt("leftThumbDistal",        b.leftThumbDistal)
+        addOpt("leftIndexProximal",      b.leftIndexProximal)
+        addOpt("leftIndexIntermediate",  b.leftIndexIntermediate)
+        addOpt("leftIndexDistal",        b.leftIndexDistal)
+        addOpt("leftMiddleProximal",     b.leftMiddleProximal)
+        addOpt("leftMiddleIntermediate", b.leftMiddleIntermediate)
+        addOpt("leftMiddleDistal",       b.leftMiddleDistal)
+        addOpt("leftRingProximal",       b.leftRingProximal)
+        addOpt("leftRingIntermediate",   b.leftRingIntermediate)
+        addOpt("leftRingDistal",         b.leftRingDistal)
+        addOpt("leftLittleProximal",     b.leftLittleProximal)
+        addOpt("leftLittleIntermediate", b.leftLittleIntermediate)
+        addOpt("leftLittleDistal",       b.leftLittleDistal)
+        
+        // Right Hand
+        addOpt("rightThumbProximal",      b.rightThumbProximal)
+        addOpt("rightThumbDistal",        b.rightThumbDistal)
+        addOpt("rightIndexProximal",      b.rightIndexProximal)
+        addOpt("rightIndexIntermediate",  b.rightIndexIntermediate)
+        addOpt("rightIndexDistal",        b.rightIndexDistal)
+        addOpt("rightMiddleProximal",     b.rightMiddleProximal)
+        addOpt("rightMiddleIntermediate", b.rightMiddleIntermediate)
+        addOpt("rightMiddleDistal",       b.rightMiddleDistal)
+        addOpt("rightRingProximal",       b.rightRingProximal)
+        addOpt("rightRingIntermediate",   b.rightRingIntermediate)
+        addOpt("rightRingDistal",         b.rightRingDistal)
+        addOpt("rightLittleProximal",     b.rightLittleProximal)
+        addOpt("rightLittleIntermediate", b.rightLittleIntermediate)
+        addOpt("rightLittleDistal",       b.rightLittleDistal)
+
         return result
     }
 
@@ -393,6 +427,4 @@ enum VRMShimUtils {
         }
         return result
     }
-
-    
 }

@@ -5,12 +5,16 @@ node_modules/
 
 # Expo
 .expo/
+
+# Build
 dist/
 web-build/
-.idea
-.vscode/
 /android/
 /ios/
+
+# IDE
+.idea
+.vscode
 
 # Native
 *.orig.*

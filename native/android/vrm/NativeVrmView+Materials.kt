@@ -1,199 +1,203 @@
 package com.dedicatus.VroidViewer.vrm
 
 import android.util.Log
-import com.facebook.react.bridge.ReadableMapKeySetIterator
 import com.google.android.filament.Material
-import com.google.android.filament.Texture
-import org.json.JSONArray
-import org.json.JSONObject
-import java.util.Arrays
-
-/**
- * Material Handling and MToon application for NativeVrmView
- */
+import com.google.android.filament.MaterialInstance
+import kotlin.math.min
+import kotlin.math.pow
 
 private const val TAG = "NativeVrmView+Materials"
 
-fun NativeVrmView.applyMToonMaterials() {
-    val model = asset ?: return
-    val metadata = vrmMetadata ?: return
-    val extensions = metadata.optJSONObject("extensions") ?: return
-    val vrm0 = extensions.optJSONObject("VRM")
-    val materialProps = vrm0?.optJSONArray("materialProperties") ?: return
+internal fun NativeVrmView.applyMToonMaterialsIfNeeded() {
+    if (renderableEntities.isEmpty()) return
+    if (mtoonMaterialsByName.isEmpty() && vrm0MaterialsByName.isEmpty()) return
 
-    Log.d(TAG, "MToon: Applying materials for ${materialProps.length()} entries")
+    var touchedCount = 0
+    for (entity in renderableEntities) {
+        val rm = renderableManager ?: continue
+        val instance = rm.getInstance(entity)
+        if (instance == 0) continue
+        val primitiveCount = rm.getPrimitiveCount(instance)
+        var touchedEntity = false
 
-    // Map material names to their index in the VRM materialProperties array
-    val materialMap = mutableMapOf<String, JSONObject>()
-    for (i in 0 until materialProps.length()) {
-        val prop = materialProps.optJSONObject(i) ?: continue
-        val name = prop.optString("name")
-        if (name.isNotBlank()) {
-            materialMap[name] = prop
+        for (i in 0 until primitiveCount) {
+            val materialInstance = rm.getMaterialInstanceAt(instance, i) ?: continue
+            val materialName =
+                (materialInstance.name ?: materialInstance.material.name ?: "").lowercase()
+
+            val mtoon = mtoonMaterialsByName[materialName]
+            val vrm0 = vrm0MaterialsByName[materialName]?.takeIf {
+                it.shader.lowercase().contains("mtoon")
+            }
+            if (mtoon == null && vrm0 == null) continue
+
+            val baseFallback = floatArrayOf(1f, 1f, 1f, 1f)
+            val baseRaw = color4From(
+                mtoon?.baseColor ?: vrm0?.vectorProps?.get("_Color"),
+                baseFallback
+            )
+            val shadeRaw = color3From(
+                mtoon?.shadeColor ?: vrm0?.vectorProps?.get("_ShadeColor")
+            )
+
+            val shadingShift = mtoon?.shadingShift
+                ?: vrm0?.floatProps?.get("_ShadingShift")
+                ?: 0f
+            val shadingToony = mtoon?.shadingToony
+                ?: vrm0?.floatProps?.get("_ShadingToony")
+                ?: 0f
+
+            // Convert to linear for Filament
+            val base = sRGBToLinear(baseRaw)
+            val shade = shadeRaw?.let { sRGBToLinear(it) }
+
+            val finalColor = if (shade != null) {
+                mixToonColor(base, shade, shadingToony, shadingShift)
+            } else {
+                base
+            }
+
+            trySetColorParameter(materialInstance, "baseColorFactor", finalColor)
+            trySetFloatParameter(materialInstance, "metallicFactor", 0f)
+            trySetFloatParameter(materialInstance, "roughnessFactor", 1f)
+            trySetFloatParameter(materialInstance, "clearcoatFactor", 0f)
+            trySetFloatParameter(materialInstance, "reflectance", 0.1f)
+
+            val doubleSided = mtoon?.doubleSided
+                ?: ((vrm0?.floatProps?.get("_CullMode") ?: 1f) <= 0.5f)
+            if (doubleSided) {
+                materialInstance.setDoubleSided(true)
+                materialInstance.setCullingMode(Material.CullingMode.NONE)
+                touchedEntity = true
+            }
+
+            val alphaMode = mtoon?.alphaMode ?: ""
+            val alphaCutoff = mtoon?.alphaCutoff
+                ?: vrm0?.floatProps?.get("_Cutoff")
+            val alphaTest = alphaMode.equals("MASK", ignoreCase = true) ||
+                (vrm0?.keywordMap?.get("_ALPHATEST_ON") == true)
+            if (alphaTest && alphaCutoff != null) {
+                trySetFloatParameter(materialInstance, "alphaCutoff", alphaCutoff)
+            }
+
+            val blendRequested = alphaMode.equals("BLEND", ignoreCase = true) ||
+                (vrm0?.keywordMap?.get("_ALPHABLEND_ON") == true) ||
+                (vrm0?.keywordMap?.get("_ALPHAPREMULTIPLY_ON") == true)
+            if (mtoon?.transparentWithZWrite == true || blendRequested) {
+                materialInstance.setDepthWrite(mtoon?.transparentWithZWrite == true)
+                materialInstance.setColorWrite(true)
+                touchedEntity = true
+            }
+
+            val queueOffset = mtoon?.renderQueueOffset ?: 0
+            if (queueOffset != 0) {
+                rm.setGlobalBlendOrderEnabledAt(instance, i, true)
+                rm.setBlendOrderAt(instance, i, queueOffset)
+                touchedEntity = true
+            }
+
+            touchedCount++
+        }
+
+        if (touchedEntity) {
+            rm.setCulling(instance, false)
         }
     }
 
-    for (entity in renderableEntities) {
-        val instance = renderableManager.getInstance(entity)
-        val primitiveCount = renderableManager.getPrimitiveCount(instance)
-        for (i in 0 until primitiveCount) {
-            val matInst = renderableManager.getMaterialInstanceAt(instance, i) ?: continue
-            val matName = matInst.name ?: ""
-            val props = materialMap[matName] ?: continue
-
-            val shader = props.optString("shader")
-            if (shader != "VRM/MToon") continue
-
-            // 1. Get MToon Properties
-            val vectorProps = props.optJSONObject("vectorProperties")
-            val floatProps = props.optJSONObject("floatProperties")
-            val keywordMap = props.optJSONObject("keywordMap")
-
-            // Lit Color (_Color)
-            val colorArr = vectorProps?.optJSONArray("_Color")
-            if (colorArr != null && colorArr.length() >= 3) {
-                matInst.setParameter("baseColorFactor", 
-                    colorArr.getDouble(0).toFloat(),
-                    colorArr.getDouble(1).toFloat(),
-                    colorArr.getDouble(2).toFloat(),
-                    colorArr.getDouble(3).toFloat()
-                )
-            }
-
-            // Shade Color (_ShadeColor) - We'll use this to tint emissive for a "flat" look in shadows
-            val shadeArr = vectorProps?.optJSONArray("_ShadeColor")
-            if (shadeArr != null && shadeArr.length() >= 3) {
-                 // In a real MToon shader this would be different, 
-                 // but for now we'll set it as a param if the material supports it.
-            }
-
-            // Shading Shift / Toony
-            val shadingShift = floatProps?.optDouble("_ShadingShiftFactor", 0.0)?.toFloat() ?: 0f
-            val shadingToony = floatProps?.optDouble("_ShadingToonyFactor", 0.0)?.toFloat() ?: 0f
-
-            // 2. Adjust Standard PBR for Toon-like look if no custom shader
-            // Ensure zero glossiness
-            matInst.setParameter("roughnessFactor", 1.0f)
-            matInst.setParameter("metallicFactor", 0.0f)
-
-            // 3. Culling / Double Sided
-            val cullMode = floatProps?.optInt("_CullMode", 2) ?: 2 // 0: Off, 1: Front, 2: Back
-            if (cullMode == 0) {
-                matInst.setDoubleSided(true)
-                matInst.setCullingMode(Material.CullingMode.NONE)
-            }
-        }
+    if (touchedCount > 0) {
+        Log.d(TAG, "Applied MToon material approximations: $touchedCount primitives")
     }
 }
 
-fun NativeVrmView.fixEyeMaterialsIfNeeded() {
+internal fun NativeVrmView.color4From(color: FloatArray?, fallback: FloatArray): FloatArray {
+    if (color == null || color.isEmpty()) return fallback
+    val r = color.getOrNull(0) ?: fallback[0]
+    val g = color.getOrNull(1) ?: fallback[1]
+    val b = color.getOrNull(2) ?: fallback[2]
+    val a = color.getOrNull(3) ?: fallback[3]
+    return floatArrayOf(r, g, b, a)
+}
+
+internal fun NativeVrmView.color3From(color: FloatArray?): FloatArray? {
+    if (color == null || color.size < 3) return null
+    return floatArrayOf(color[0], color[1], color[2])
+}
+
+internal fun NativeVrmView.mixToonColor(base: FloatArray, shade: FloatArray, shadingToony: Float, shadingShift: Float): FloatArray {
+    val toony = shadingToony.coerceIn(0f, 1f)
+    val shift = shadingShift.coerceIn(-1f, 1f)
+    // Reduced mix factor (0.35 -> 0.25) to make the shade more subtle and allow dynamic shadows to be more distinguishable
+    val mix = (0.25f + (toony * 0.35f) + (shift * 0.15f)).coerceIn(0f, 1f)
+    val inv = 1f - mix
+    return floatArrayOf(
+        base[0] * inv + shade[0] * mix,
+        base[1] * inv + shade[1] * mix,
+        base[2] * inv + shade[2] * mix,
+        base[3]
+    )
+}
+
+private fun sRGBToLinearScalar(c: Float): Float {
+    val base = ((c + 0.055f) / 1.055f).toDouble()
+    return if (c <= 0.04045f) c / 12.92f else base.pow(2.4).toFloat()
+}
+
+internal fun NativeVrmView.sRGBToLinear(color: FloatArray): FloatArray {
+    val res = color.copyOf()
+    for (i in 0 until min(3, res.size)) {
+        res[i] = sRGBToLinearScalar(res[i])
+    }
+    return res
+}
+
+internal fun NativeVrmView.trySetFloatParameter(materialInstance: MaterialInstance, name: String, value: Float) {
+    val param = materialInstance.material.parameters.firstOrNull { it.name == name } ?: return
+    if (param.type == Material.Parameter.Type.FLOAT) {
+        materialInstance.setParameter(name, value)
+    }
+}
+
+internal fun NativeVrmView.trySetColorParameter(materialInstance: MaterialInstance, name: String, color: FloatArray) {
+    val param = materialInstance.material.parameters.firstOrNull { it.name == name } ?: return
+    when (param.type) {
+        Material.Parameter.Type.FLOAT4 -> {
+            materialInstance.setParameter(name, color[0], color[1], color[2], color[3])
+        }
+        Material.Parameter.Type.FLOAT3 -> {
+            materialInstance.setParameter(name, color[0], color[1], color[2])
+        }
+        else -> Unit
+    }
+}
+
+internal fun NativeVrmView.fixEyeMaterialsIfNeeded() {
     if (renderableEntities.isEmpty()) return
     val patterns = listOf("eye", "iris", "pupil", "sclera", "cornea", "lash", "eyelash")
     var adjusted = 0
+    val rm = renderableManager ?: return
     for (entity in renderableEntities) {
-        val instance = renderableManager.getInstance(entity)
-        val primitiveCount = renderableManager.getPrimitiveCount(instance)
+        val instance = rm.getInstance(entity)
+        val primitiveCount = rm.getPrimitiveCount(instance)
         var touched = false
         for (i in 0 until primitiveCount) {
-            val materialInstance = renderableManager.getMaterialInstanceAt(instance, i) ?: continue
+            val materialInstance = rm.getMaterialInstanceAt(instance, i) ?: continue
             val name = materialInstance.name?.lowercase() ?: ""
             if (patterns.any { name.contains(it) }) {
                 materialInstance.setDoubleSided(true)
                 materialInstance.setCullingMode(Material.CullingMode.NONE)
                 materialInstance.setDepthWrite(true)
                 materialInstance.setColorWrite(true)
-                renderableManager.setGlobalBlendOrderEnabledAt(instance, i, true)
-                renderableManager.setBlendOrderAt(instance, i, 10)
+                rm.setGlobalBlendOrderEnabledAt(instance, i, true)
+                rm.setBlendOrderAt(instance, i, 10)
                 adjusted++
                 touched = true
             }
         }
         if (touched) {
-            renderableManager.setCulling(instance, false)
+            rm.setCulling(instance, false)
         }
     }
     if (adjusted > 0) {
         Log.d(TAG, "Adjusted $adjusted eye material primitives")
     }
-}
-
-fun NativeVrmView.applyExpressions() {
-    val model = asset ?: return
-    val expressions = pendingExpressions ?: return
-    if (renderableEntities.isEmpty()) return
-
-    resetMorphWeights()
-    val iterator: ReadableMapKeySetIterator = expressions.keySetIterator()
-    while (iterator.hasNextKey()) {
-        val key = iterator.nextKey()
-        val weight = expressions.getDouble(key).toFloat()
-        val lowerKey = key.lowercase()
-        val possibleNames = expressionMapping[lowerKey] ?: listOf(lowerKey)
-
-        for (renderableIndex in renderableEntities.indices) {
-            val names = morphTargetNamesByRenderable[renderableIndex]
-            val weights = morphWeightsByRenderable[renderableIndex]
-            for (i in names.indices) {
-                val targetName = names[i]
-                if (possibleNames.any { targetName.contains(it) }) {
-                    weights[i] = weight
-                }
-            }
-        }
-    }
-
-    for (renderableIndex in renderableEntities.indices) {
-        val entity = renderableEntities[renderableIndex]
-        val instance = renderableManager.getInstance(entity)
-        val weights = morphWeightsByRenderable[renderableIndex]
-        renderableManager.setMorphWeights(instance, weights, weights.size)
-    }
-}
-
-internal fun NativeVrmView.resetMorphWeights() {
-    morphWeightsByRenderable.forEach { weights ->
-        Arrays.fill(weights, 0f)
-    }
-}
-
-internal val expressionMapping: Map<String, List<String>> = mapOf(
-    "happy" to listOf("joy", "fun", "happy"),
-    "angry" to listOf("angry"),
-    "sad" to listOf("sorrow", "sad"),
-    "surprised" to listOf("surprised"),
-    "relaxed" to listOf("neutral", "relaxed"),
-    "blink" to listOf("blink", "close"),
-    "aa" to listOf("mth_a", "vowel_a"),
-    "ih" to listOf("mth_i", "vowel_i"),
-    "ou" to listOf("mth_u", "vowel_u"),
-    "ee" to listOf("mth_e", "vowel_e"),
-    "oh" to listOf("mth_o", "vowel_o"),
-)
-
-fun NativeVrmView.applyHiddenMeshes() {
-    val model = asset ?: return
-    if (renderableEntities.isEmpty()) return
-    
-    if (hiddenRenderables.isNotEmpty()) {
-        for (entity in hiddenRenderables) {
-            scene.addEntity(entity)
-        }
-        hiddenRenderables.clear()
-    }
-
-    if (hiddenMeshNames.isEmpty()) return
-
-    var matchedCount = 0
-    for (name in hiddenMeshNames) {
-        val key = wardrobeKey(name)
-        if (key.isBlank()) continue
-        val entities = renderableNameIndex[key] ?: continue
-        for (entity in entities) {
-            if (hiddenRenderables.contains(entity)) continue
-            scene.removeEntity(entity)
-            hiddenRenderables.add(entity)
-            matchedCount++
-        }
-    }
-    Log.d(TAG, "Wardrobe hidden renderables: $matchedCount")
 }

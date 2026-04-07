@@ -3,7 +3,8 @@ package com.dedicatus.VroidViewer.vrm
 import android.net.Uri
 import android.util.Log
 import com.google.android.filament.gltfio.FilamentAsset
-import com.google.android.filament.utils.Quaternion
+import dev.romainguy.kotlin.math.Float3
+import dev.romainguy.kotlin.math.Quaternion
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -19,6 +20,34 @@ import kotlin.math.*
 
 private const val TAG = "NativeVrmView+Loading"
 
+private fun hasExtension(json: JSONObject?, name: String): Boolean {
+    if (json == null) return false
+    val extensions = json.optJSONObject("extensions")
+    if (extensions?.has(name) == true) return true
+    val used = json.optJSONArray("extensionsUsed")
+    if (used != null) {
+        for (i in 0 until used.length()) {
+            if (name == used.optString(i)) return true
+        }
+    }
+    val required = json.optJSONArray("extensionsRequired")
+    if (required != null) {
+        for (i in 0 until required.length()) {
+            if (name == required.optString(i)) return true
+        }
+    }
+    return false
+}
+
+private fun detectVrmVersion(json: JSONObject?): String? {
+    // Prefer explicit VRM 1.x extension when available.
+    return when {
+        hasExtension(json, "VRMC_vrm") -> "1"
+        hasExtension(json, "VRM") -> "0"
+        else -> null
+    }
+}
+
 fun NativeVrmView.loadModel(uriString: String) {
     destroyModel()
 
@@ -33,6 +62,14 @@ fun NativeVrmView.loadModel(uriString: String) {
         val data = File(fileLocation).readBytes()
         val vrmJson = parseVrmBoneMap(data)
         vrmMetadata = vrmJson
+        
+        // Auto-detect VRM version from extension keys (extensions/used/required)
+        val detectedVersion = detectVrmVersion(vrmJson)
+        if (detectedVersion != null) {
+            vrmVersion = detectedVersion
+            Log.d(TAG, "Auto-detected VRM version: $vrmVersion")
+        }
+
         vrmBoneNodeNames.clear()
         vrmBoneNodeNames.putAll(extractBoneMapping(vrmJson))
 
@@ -53,14 +90,18 @@ fun NativeVrmView.loadModel(uriString: String) {
         }
 
         cacheEntities()
+        
+        parseMaterialMetadata(vrmJson)
+        
         applyModelVisibility()
         frameModel()
+        updateModelOrientation() 
         fixEyeMaterialsIfNeeded()
         applyExpressions()
         applyBoneRotations()
         
-        // Android specific: trigger MToon logic
-        applyMToonMaterials()
+        applyMToonMaterialsIfNeeded()
+        configureSpringBones()
         
     } catch (error: Exception) {
         Log.e(TAG, "Failed to load model: $fileLocation", error)
@@ -187,40 +228,255 @@ fun NativeVrmView.extractBoneMapping(json: JSONObject?): Map<String, String> {
     return result
 }
 
+fun NativeVrmView.parseMaterialMetadata(json: JSONObject?) {
+    mtoonMaterialsByName.clear()
+    vrm0MaterialsByName.clear()
+    if (json == null) return
+
+    val extensions = json.optJSONObject("extensions") ?: JSONObject()
+    
+    val vrm0 = extensions.optJSONObject("VRM")
+    val materialProps = vrm0?.optJSONArray("materialProperties")
+    if (materialProps != null) {
+        for (i in 0 until materialProps.length()) {
+            val prop = materialProps.optJSONObject(i) ?: continue
+            val name = prop.optString("name").lowercase()
+            val shader = prop.optString("shader")
+            
+            val floatProps = mutableMapOf<String, Float>()
+            val fObj = prop.optJSONObject("floatProperties")
+            if (fObj != null) {
+                val keys = fObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    floatProps[k] = fObj.optDouble(k).toFloat()
+                }
+            }
+            
+            val vectorProps = mutableMapOf<String, FloatArray>()
+            val vObj = prop.optJSONObject("vectorProperties")
+            if (vObj != null) {
+                val keys = vObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val arr = vObj.optJSONArray(k)
+                    if (arr != null) {
+                        val fa = FloatArray(arr.length())
+                        for (j in 0 until arr.length()) fa[j] = arr.optDouble(j).toFloat()
+                        vectorProps[k] = fa
+                    }
+                }
+            }
+            
+            val keywordMap = mutableMapOf<String, Boolean>()
+            val kObj = prop.optJSONObject("keywordMap")
+            if (kObj != null) {
+                val keys = kObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    keywordMap[k] = kObj.optBoolean(k)
+                }
+            }
+            
+            val config = VRM0MaterialConfig(name, shader, floatProps, vectorProps, keywordMap)
+            vrm0MaterialsByName[name] = config
+            
+            if (shader.lowercase().contains("mtoon")) {
+                val mtoon = MToonMaterial(
+                    name = name,
+                    baseColor = vectorProps["_Color"],
+                    shadeColor = vectorProps["_ShadeColor"],
+                    shadingShift = floatProps["_ShadingShift"] ?: 0f,
+                    shadingToony = floatProps["_ShadingToony"] ?: 0f,
+                    doubleSided = (floatProps["_CullMode"] ?: 2f) <= 0.5f,
+                    alphaMode = if (keywordMap["_ALPHATEST_ON"] == true) "MASK" else if (keywordMap["_ALPHABLEND_ON"] == true) "BLEND" else "OPAQUE",
+                    alphaCutoff = floatProps["_Cutoff"],
+                    transparentWithZWrite = floatProps["_ZWrite"]?.toInt() == 1 && keywordMap["_ALPHABLEND_ON"] == true
+                )
+                mtoonMaterialsByName[name] = mtoon
+            }
+        }
+    }
+    
+    val materials = json.optJSONArray("materials")
+    if (materials != null) {
+        for (i in 0 until materials.length()) {
+            val mat = materials.optJSONObject(i) ?: continue
+            val name = mat.optString("name").lowercase()
+            val matExtensions = mat.optJSONObject("extensions") ?: JSONObject()
+            val mToon1 = matExtensions.optJSONObject("VRMC_materials_mtoon")
+            
+            if (mToon1 != null) {
+                val pbr = mat.optJSONObject("pbrMetallicRoughness")
+                val baseColor = if (pbr != null) {
+                    val arr = pbr.optJSONArray("baseColorFactor")
+                    if (arr != null) {
+                        floatArrayOf(arr.optDouble(0).toFloat(), arr.optDouble(1).toFloat(), arr.optDouble(2).toFloat(), arr.optDouble(3).toFloat())
+                    } else null
+                } else null
+                
+                val shadeArr = mToon1.optJSONArray("shadeColorFactor")
+                val shadeColor = if (shadeArr != null) {
+                    floatArrayOf(shadeArr.optDouble(0).toFloat(), shadeArr.optDouble(1).toFloat(), shadeArr.optDouble(2).toFloat())
+                } else null
+                
+                val mtoon = MToonMaterial(
+                    name = name,
+                    baseColor = baseColor,
+                    shadeColor = shadeColor,
+                    shadingShift = mToon1.optDouble("shadingShiftFactor", 0.0).toFloat(),
+                    shadingToony = mToon1.optDouble("shadingToonyFactor", 0.0).toFloat(),
+                    doubleSided = mat.optBoolean("doubleSided", false),
+                    alphaMode = mat.optString("alphaMode", "OPAQUE"),
+                    alphaCutoff = mat.optDouble("alphaCutoff", 0.5).toFloat(),
+                    transparentWithZWrite = mToon1.optBoolean("transparentWithZWrite", false),
+                    renderQueueOffset = matExtensions.optJSONObject("VRMC_vrm")?.optInt("renderQueueOffsetNumber", 0) ?: 0
+                )
+                mtoonMaterialsByName[name] = mtoon
+            }
+        }
+    }
+}
+
+fun NativeVrmView.configureSpringBones() {
+    val json = vrmMetadata ?: return
+    val colliders = mutableListOf<ParsedSpringBoneCollider>()
+    val springs = mutableListOf<ParsedSpringBone>()
+    val extensions = json.optJSONObject("extensions") ?: JSONObject()
+
+    val vrm0 = extensions.optJSONObject("VRM")
+    val secAnim0 = vrm0?.optJSONObject("secondaryAnimation")
+    if (secAnim0 != null) {
+        val colliderGroups = secAnim0.optJSONArray("colliderGroups")
+        if (colliderGroups != null) {
+            for (i in 0 until colliderGroups.length()) {
+                val group = colliderGroups.optJSONObject(i) ?: continue
+                val nodeIndex = group.optInt("node", -1)
+                val nodeName = nodeNameForIndex(json, nodeIndex) ?: continue
+                val colls = group.optJSONArray("colliders")
+                if (colls != null) {
+                    for (j in 0 until colls.length()) {
+                        val col = colls.optJSONObject(j) ?: continue
+                        val offsetObj = col.optJSONObject("offset")
+                        val offset = if (offsetObj != null) {
+                            dev.romainguy.kotlin.math.Float3(
+                                offsetObj.optDouble("x", 0.0).toFloat(),
+                                offsetObj.optDouble("y", 0.0).toFloat(),
+                                offsetObj.optDouble("z", 0.0).toFloat()
+                            )
+                        } else dev.romainguy.kotlin.math.Float3(0f, 0f, 0f)
+                        val radius = col.optDouble("radius", 0.1).toFloat()
+                        colliders.add(ParsedSpringBoneCollider(nodeName, SpringBoneColliderShape.Sphere(offset, radius)))
+                    }
+                }
+            }
+        }
+
+        val boneGroups = secAnim0.optJSONArray("boneGroups")
+        if (boneGroups != null) {
+            for (i in 0 until boneGroups.length()) {
+                val group = boneGroups.optJSONObject(i) ?: continue
+                val comment = group.optString("comment", "spring_$i")
+                val centerIndex = group.optInt("center", -1)
+                val centerName = nodeNameForIndex(json, centerIndex)
+                val colliderIndices = mutableListOf<Int>()
+                val colIdxArray = group.optJSONArray("colliderGroups")
+                if (colIdxArray != null) {
+                    for (j in 0 until colIdxArray.length()) colliderIndices.add(colIdxArray.getInt(j))
+                }
+
+                val stiffness = group.optDouble("stiffnessForce", 1.0).toFloat()
+                val gravityPower = group.optDouble("gravityPower", 0.0).toFloat()
+                val gravDirObj = group.optJSONObject("gravityDir")
+                val gravDir = if (gravDirObj != null) {
+                    dev.romainguy.kotlin.math.Float3(
+                        gravDirObj.optDouble("x", 0.0).toFloat(),
+                        gravDirObj.optDouble("y", -1.0).toFloat(),
+                        gravDirObj.optDouble("z", 0.0).toFloat()
+                    )
+                } else dev.romainguy.kotlin.math.Float3(0f, -1f, 0f)
+                val dragForce = group.optDouble("dragForce", 0.4).toFloat()
+
+                val joints = mutableListOf<ParsedSpringBoneJoint>()
+                val bones = group.optJSONArray("bones")
+                if (bones != null) {
+                    for (j in 0 until bones.length()) {
+                        val nodeIndex = bones.getInt(j)
+                        val nodeName = nodeNameForIndex(json, nodeIndex) ?: continue
+                        joints.add(ParsedSpringBoneJoint(
+                            nodeName, 0.05f * stiffness, stiffness, gravityPower, gravDir, dragForce
+                        ))
+                    }
+                }
+                springs.add(ParsedSpringBone(comment, centerName, joints, colliderIndices))
+            }
+        }
+    }
+
+    if (springs.isNotEmpty()) {
+        Log.d("NativeVrmView", "Initializing SpringBones with ${springs.size} springs and ${colliders.size} colliders")
+        springBones = NativeVrmSpringBones(transformManager, boneEntities, ParsedSpringBoneData(colliders, springs))
+    }
+}
+
+private fun NativeVrmView.nodeNameForIndex(json: JSONObject, index: Int): String? {
+    if (index < 0) return null
+    val nodes = json.optJSONArray("nodes") ?: return null
+    if (index >= nodes.length()) return null
+    return nodes.optJSONObject(index)?.optString("name")
+}
+
 fun NativeVrmView.frameModel() {
     val model = asset ?: return
     val box = model.boundingBox
     val center = box.center
     val half = box.halfExtent
-    val sizeX = half[0] * 2f
     val sizeY = half[1] * 2f
-    val sizeZ = half[2] * 2f
-    val maxDim = max(sizeX, max(sizeY, sizeZ))
+    val maxDim = max(half[0] * 2f, max(sizeY, half[2] * 2f))
 
     val baseDistance = maxDim * 1.9f
-    val targetY = center[1] + sizeY * 0.18f
-    orbitTarget = floatArrayOf(center[0], targetY, center[2])
+    orbitTarget = floatArrayOf(center[0], center[1] + sizeY * 0.18f, center[2])
+    
     val desiredDistance = initialZoom ?: baseDistance
-    val elevation = sizeY * 0.12f
-    currentDistance = sqrt(desiredDistance * desiredDistance + elevation * elevation)
-    currentDistance = clampedDistance(currentDistance)
-    polarAngle = clampedPolar(acos((elevation / currentDistance).coerceIn(-1.0f, 1.0f)))
+    currentDistance = clampedDistance(desiredDistance)
+    polarAngle = clampedPolar((PI * 0.38).toFloat())
     azimuthAngle = clampedAzimuth(0.0f)
+    
     targetDistance = currentDistance
     targetPolarAngle = polarAngle
     targetAzimuthAngle = azimuthAngle
-
-    // Apply root rotation for VRM0 to face camera
-    if (vrmVersion.startsWith("0")) {
-        val rootEntity = model.root
-        if (transformManager.hasComponent(rootEntity)) {
-            val rootInstance = transformManager.getInstance(rootEntity)
-            val rest = restTransforms[rootEntity]
-            val rot = toColumnMajor(Quaternion(0f, 1f, 0f, 0f).toMatrix().toFloatArray())
-            val result = if (rest != null) multiplyMat4(rest, rot) else rot
-            transformManager.setTransform(rootInstance, result)
-        }
-    }
-
+    
     updateCamera()
+}
+
+fun NativeVrmView.updateModelOrientation() {
+    val model = asset ?: return
+    val rootEntity = model.root
+    if (!transformManager.hasComponent(rootEntity)) return
+    
+    val rootInstance = transformManager.getInstance(rootEntity)
+    val rest = restTransforms[rootEntity] ?: run {
+        // Root may not be part of model.entities; cache its rest transform explicitly.
+        val base = FloatArray(16)
+        transformManager.getTransform(rootInstance, base)
+        restTransforms[rootEntity] = base
+        base
+    }
+    
+    // VRM 0.x models face -Z. Camera is at +Z. 
+    // To face camera, they NEED 180 degrees (PI).
+    // VRM 1.x models already face +Z.
+    val detected = detectVrmVersion(vrmMetadata)
+    val rotateVrm0 = detected?.startsWith("0") ?: vrmVersion.startsWith("0")
+    val rotationAngle = if (rotateVrm0) PI.toFloat() else 0f
+    
+    Log.d("NativeVrmOrientation", "Correcting orientation: detected=$detected, version=$vrmVersion, angle=$rotationAngle")
+    
+    val half = rotationAngle * 0.5f
+    val q = Quaternion(0f, sin(half), 0f, cos(half))
+    val rotMat = toMatrixFloatArray(q)
+    
+    // IMPORTANT: We must multiply with the original rest transform to preserve scale and initial pose
+    val result = multiplyMat4(rest, rotMat)
+    transformManager.setTransform(rootInstance, result)
 }

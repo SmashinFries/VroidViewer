@@ -13,6 +13,12 @@ class NativeVrmViewManager : SimpleViewManager<NativeVrmView>() {
         return NativeVrmView(reactContext)
     }
 
+    override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any>? {
+        return mutableMapOf(
+            "onModelLoaded" to mutableMapOf("registrationName" to "onModelLoaded")
+        )
+    }
+
     @ReactProp(name = "modelUri")
     fun setModelUri(view: NativeVrmView, uri: String?) {
         view.setModelUri(uri)
@@ -78,5 +84,20 @@ class NativeVrmViewManager : SimpleViewManager<NativeVrmView>() {
     @ReactProp(name = "maxAzimuthAngle", defaultFloat = 0.0f)
     fun setMaxAzimuthAngle(view: NativeVrmView, value: Float) {
         view.setMaxAzimuthAngle(value)
+    }
+
+    @ReactProp(name = "lookAtEnabled", defaultBoolean = false)
+    fun setLookAtEnabled(view: NativeVrmView, value: Boolean) {
+        view.setLookAtEnabled(value)
+    }
+
+    @ReactProp(name = "headTracker", defaultBoolean = false)
+    fun setHeadTracker(view: NativeVrmView, value: Boolean) {
+        view.setHeadTracker(value)
+    }
+
+    @ReactProp(name = "enableEyeLookAt", defaultBoolean = false)
+    fun setEnableEyeLookAt(view: NativeVrmView, value: Boolean) {
+        view.setEnableEyeLookAt(value)
     }
 }

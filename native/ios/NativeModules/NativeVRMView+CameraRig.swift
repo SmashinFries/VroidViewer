@@ -57,7 +57,7 @@ extension NativeVRMView {
         }
     }
 
-    // MARK: - Expressions & Bones
+    // MARK: - Expressions, Bones & Look-At
 
     func applyExpressions() {
         guard let vrm = vrmEntity, let expressions = expressions else { return }
@@ -65,15 +65,21 @@ extension NativeVRMView {
         for (key, value) in expressions {
             guard let weight = value as? NSNumber else { continue }
             let fWeight = Float(weight.floatValue)
+            let lower = key.lowercased()
+
+            if nativeLipSyncEnabled && visemeKeys.contains(lower) {
+                continue
+            }
 
             let preset: BlendShapePreset?
-            switch key.lowercased() {
+            switch lower {
             case "aa":        preset = .a
             case "ih":        preset = .i
             case "ou":        preset = .u
             case "ee":        preset = .e
             case "oh":        preset = .o
             case "blink":     preset = .blink
+            case "joy":       preset = .joy
             case "happy":     preset = .joy
             case "angry":     preset = .angry
             case "sad":       preset = .sorrow
@@ -94,19 +100,21 @@ extension NativeVRMView {
 
         for (boneName, value) in rotations {
             guard let q = value as? [String: NSNumber] else { continue }
-            let quat = simd_quaternion(
+            let delta = simd_quaternion(
                 Float(q["x"]?.floatValue ?? 0),
                 Float(q["y"]?.floatValue ?? 0),
                 Float(q["z"]?.floatValue ?? 0),
                 Float(q["w"]?.floatValue ?? 1)
             )
-            let converted = convertQuaternionFromJS(quat)
+            let converted = convertQuaternionFromJS(delta)
             if let bone = findHumanBone(name: boneName) {
-                vrm.humanoid.node(for: bone)?.orientation = converted
+                applyDeltaOrientation(bone: bone, delta: converted, vrm: vrm)
             }
         }
-        
-        applyCombinedRotations()
+
+        if lookAtEnabled || headTracker || enableEyeLookAt {
+            applyLookAt()
+        }
     }
 
     func findHumanBone(name: String) -> Humanoid.Bones? {
@@ -132,8 +140,70 @@ extension NativeVRMView {
         case "leftfoot":      return .leftFoot
         case "rightfoot":     return .rightFoot
         case "upperchest":    return .upperChest
+        case "leftthumbproximal":      return .leftThumbProximal
+        case "leftthumbdistal":        return .leftThumbDistal
+        case "leftindexproximal":      return .leftIndexProximal
+        case "leftindexintermediate":  return .leftIndexIntermediate
+        case "leftindexdistal":        return .leftIndexDistal
+        case "leftmiddleproximal":     return .leftMiddleProximal
+        case "leftmiddleintermediate": return .leftMiddleIntermediate
+        case "leftmiddledistal":       return .leftMiddleDistal
+        case "leftringproximal":       return .leftRingProximal
+        case "leftringintermediate":   return .leftRingIntermediate
+        case "leftringdistal":         return .leftRingDistal
+        case "leftlittleproximal":     return .leftLittleProximal
+        case "leftlittleintermediate": return .leftLittleIntermediate
+        case "leftlittledistal":       return .leftLittleDistal
+        case "rightthumbproximal":      return .rightThumbProximal
+        case "rightthumbdistal":        return .rightThumbDistal
+        case "rightindexproximal":      return .rightIndexProximal
+        case "rightindexintermediate":  return .rightIndexIntermediate
+        case "rightindexdistal":        return .rightIndexDistal
+        case "rightmiddleproximal":     return .rightMiddleProximal
+        case "rightmiddleintermediate": return .rightMiddleIntermediate
+        case "rightmiddledistal":       return .rightMiddleDistal
+        case "rightringproximal":       return .rightRingProximal
+        case "rightringintermediate":   return .rightRingIntermediate
+        case "rightringdistal":         return .rightRingDistal
+        case "rightlittleproximal":     return .rightLittleProximal
+        case "rightlittleintermediate": return .rightLittleIntermediate
+        case "rightlittledistal":       return .rightLittleDistal
         default:              return nil
         }
+    }
+
+    func updateLookAtState() {
+        if lookAtEnabled || headTracker || enableEyeLookAt {
+            applyLookAt()
+        } else {
+            lookAtInitialized = false
+            resetHeadNeckOrientation()
+        }
+
+        if !(enableEyeLookAt || lookAtEnabled) {
+            resetEyeOrientation()
+            if let vrm = vrmEntity, resolvedLookAtConfig().type == .expression {
+                applyLookAtExpressions(yawDeg: 0, pitchDeg: 0, config: resolvedLookAtConfig(), vrm: vrm)
+            }
+        }
+    }
+
+    func resolvedLookAtConfig() -> LookAtConfig {
+        if let config = lookAtConfig {
+            return config
+        }
+
+        let isVrm0 = loadedIsVRM0 ?? (vrmVersion == "0")
+        let type: LookAtType = isVrm0 ? .bone : .expression
+        let defaultOutput: Float = type == .expression ? 1.0 : 10.0
+        let map = LookAtRangeMap(inputMax: 90.0, outputScale: defaultOutput)
+        return LookAtConfig(
+            type: type,
+            horizInner: map,
+            horizOuter: map,
+            vertDown: map,
+            vertUp: map
+        )
     }
 
     // MARK: - Look-At (model head/eyes track the orbit camera)
@@ -141,101 +211,126 @@ extension NativeVRMView {
     func applyLookAt() {
         guard let vrm = vrmEntity else { return }
         guard lookAtEnabled || headTracker || enableEyeLookAt else { return }
+        guard let headNode = vrm.humanoid.node(for: .head) else { return }
 
-        // Use the orbitTarget (or head position) as reference
-        let hr = cameraEntity.position(relativeTo: nil) - orbitTarget
-        let dy = hr.y
+        let neckNode   = vrm.humanoid.node(for: .neck)
+        let headParent: Entity = neckNode?.parent ?? headNode.parent ?? anchorEntity
+        let cameraWorldPos = cameraEntity.position(relativeTo: nil)
 
-        // Compute horizontal distance
-        let distH = max(0.001, sqrt(hr.x * hr.x + hr.z * hr.z))
-        let trackingSpeed: Float = lookAtInitialized ? 0.08 : 1.0
+        guard let headAngles = computeYawPitch(
+            bone: .head,
+            boneNode: headNode,
+            parent: headParent,
+            cameraWorldPos: cameraWorldPos
+        ) else {
+            return
+        }
+        let (yaw, pitch) = headAngles
+        let radToDeg: Float = 180.0 / .pi
+        let degToRad: Float = .pi / 180.0
 
-        if lookAtEnabled || headTracker {
-            // Pitch (up/down) and Yaw (left/right) mapping based on camera relative position
-            var cp = atan2(-dy, distH)
-            var cy = atan2(hr.x, hr.z)
-
-            // VRM 1.x faces +Z, VRM 0.x faces -Z
-            let is180 = isUsing180Rotation()
-            if is180 { cy = atan2(-hr.x, -hr.z) }
-            
-            cy = max(-.pi/3, min(.pi/3, cy))
-            cp = max(-.pi/4, min(.pi/4, cp))
-
-            let qHead = simd_quaternion(Float(cy) * 0.7, SIMD3<Float>(0, 1, 0))
-                      * simd_quaternion(Float(cp) * 0.7, SIMD3<Float>(1, 0, 0))
-            let qNeck = simd_quaternion(Float(cy) * 0.3, SIMD3<Float>(0, 1, 0))
-                      * simd_quaternion(Float(cp) * 0.3, SIMD3<Float>(1, 0, 0))
-
-            lookAtHeadOffset = simd_slerp(lookAtHeadOffset, qHead, trackingSpeed)
-            lookAtNeckOffset = simd_slerp(lookAtNeckOffset, qNeck, trackingSpeed)
+        let targetYawDeg = yaw * radToDeg
+        let targetPitchDeg = pitch * radToDeg
+        if !lookAtInitialized {
+            lookAtYawDeg = targetYawDeg
+            lookAtPitchDeg = targetPitchDeg
+            lookAtInitialized = true
+        } else {
+            lookAtYawDeg += (targetYawDeg - lookAtYawDeg) * lookAtSmoothing
+            lookAtPitchDeg += (targetPitchDeg - lookAtPitchDeg) * lookAtSmoothing
         }
 
-        if enableEyeLookAt {
-            var cp = atan2(-dy, distH)
-            var cy = atan2(hr.x, hr.z)
+        let yawDeg = lookAtYawDeg
+        let pitchDeg = lookAtPitchDeg
 
-            let is180 = isUsing180Rotation()
-            if is180 { cy = atan2(-hr.x, -hr.z) }
+        let maxHeadYawDeg:   Float = 45.0
+        let maxHeadPitchDeg: Float = 30.0
+        let cy = max(-maxHeadYawDeg,   min(maxHeadYawDeg,   yawDeg)) * degToRad
+        let cp = max(-maxHeadPitchDeg, min(maxHeadPitchDeg, pitchDeg)) * degToRad
 
-            let y = max(-.pi/12, min(.pi/12, Float(cy) * 0.3))
-            let p = max(-.pi/15, min(.pi/15, Float(cp) * 0.3))
+        // Treat enableEyeLookAt as the primary toggle (JS only exposes this),
+        // and allow it to also drive head/neck subtly for stability.
+        let enableHead = lookAtEnabled || headTracker || enableEyeLookAt
+        let enableEyes = lookAtEnabled || enableEyeLookAt
+        let config = resolvedLookAtConfig()
 
-            let qEye = simd_quaternion(Float(y), SIMD3<Float>(0, 1, 0)) * simd_quaternion(Float(p), SIMD3<Float>(1, 0, 0))
-            lookAtEyeOffset = simd_slerp(lookAtEyeOffset, qEye, trackingSpeed)
-        }
-
-        lookAtInitialized = true
-        applyCombinedRotations()
-    }
-
-    func applyCombinedRotations() {
-        guard let vrm = vrmEntity else { return }
-
-        // Start by pulling the JS base data directly out of the bone storage (or default to Identity)
-        if (lookAtEnabled || headTracker), let head = vrm.humanoid.node(for: .head) {
-             let base = extractJSRotation(for: "head")
-             head.orientation = base * lookAtHeadOffset
-        }
-        if (lookAtEnabled || headTracker), let neck = vrm.humanoid.node(for: .neck) {
-             let base = extractJSRotation(for: "neck")
-             neck.orientation = base * lookAtNeckOffset
-        }
-
-        if enableEyeLookAt {
-            if let leftEye = vrm.humanoid.node(for: .leftEye) {
-                let base = extractJSRotation(for: "lefteye")
-                leftEye.orientation = base * lookAtEyeOffset
-            }
-            if let rightEye = vrm.humanoid.node(for: .rightEye) {
-                let base = extractJSRotation(for: "righteye")
-                rightEye.orientation = base * lookAtEyeOffset
+        if enableHead {
+            let qHead = simd_quaternion(cy * 0.7, SIMD3<Float>(0, 1, 0))
+                      * simd_quaternion(cp * 0.7, SIMD3<Float>(1, 0, 0))
+            let qNeck = simd_quaternion(cy * 0.3, SIMD3<Float>(0, 1, 0))
+                      * simd_quaternion(cp * 0.3, SIMD3<Float>(1, 0, 0))
+            applyDeltaOrientation(bone: .head, delta: qHead, vrm: vrm)
+            if neckNode != nil {
+                applyDeltaOrientation(bone: .neck, delta: qNeck, vrm: vrm)
             }
         }
+
+        if enableEyes {
+            switch config.type {
+            case .expression:
+                applyLookAtExpressions(yawDeg: yawDeg, pitchDeg: pitchDeg, config: config, vrm: vrm)
+            case .bone:
+                let leftYawDeg = yawDeg < 0 ? -config.horizInner.map(-yawDeg) : config.horizOuter.map(yawDeg)
+                let rightYawDeg = yawDeg < 0 ? -config.horizOuter.map(-yawDeg) : config.horizInner.map(yawDeg)
+                let pitchMappedDeg = pitchDeg < 0 ? -config.vertDown.map(-pitchDeg) : config.vertUp.map(pitchDeg)
+
+                let qLeft = simd_quaternion(leftYawDeg * degToRad, SIMD3<Float>(0, 1, 0))
+                          * simd_quaternion(pitchMappedDeg * degToRad, SIMD3<Float>(1, 0, 0))
+                let qRight = simd_quaternion(rightYawDeg * degToRad, SIMD3<Float>(0, 1, 0))
+                           * simd_quaternion(pitchMappedDeg * degToRad, SIMD3<Float>(1, 0, 0))
+                applyDeltaOrientation(bone: .leftEye, delta: qLeft, vrm: vrm)
+                applyDeltaOrientation(bone: .rightEye, delta: qRight, vrm: vrm)
+            }
+        }
     }
 
-    func extractJSRotation(for boneName: String) -> simd_quatf {
-        guard let rotations = boneRotations, let value = rotations[boneName] as? [String: NSNumber] else {
-            return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    func computeYawPitch(
+        bone: Humanoid.Bones,
+        boneNode: Entity,
+        parent: Entity,
+        cameraWorldPos: SIMD3<Float>
+    ) -> (Float, Float)? {
+        let cameraInParent = parent.convert(position: cameraWorldPos, from: nil)
+        let boneInParent = boneNode.position
+        let dirParent = cameraInParent - boneInParent
+        let len = simd_length(dirParent)
+        if len < 1e-5 { return nil }
+        var dir = dirParent / len
+        if let rest = restBoneOrientations[bone] {
+            dir = simd_act(rest.inverse, dir)
         }
-        let quat = simd_quaternion(
-            Float(value["x"]?.floatValue ?? 0),
-            Float(value["y"]?.floatValue ?? 0),
-            Float(value["z"]?.floatValue ?? 0),
-            Float(value["w"]?.floatValue ?? 1)
-        )
-        return convertQuaternionFromJS(quat)
+        let forwardZ = dir.z
+        let yaw = atan2(dir.x, forwardZ)
+        let pitch = atan2(dir.y, sqrt(dir.x * dir.x + forwardZ * forwardZ))
+        return (yaw, pitch)
+    }
+
+    func applyLookAtExpressions(yawDeg: Float, pitchDeg: Float, config: LookAtConfig, vrm: VRMEntity) {
+        let yawWeight = config.horizOuter.map(abs(yawDeg))
+        let pitchWeightDown = config.vertDown.map(abs(pitchDeg))
+        let pitchWeightUp = config.vertUp.map(abs(pitchDeg))
+
+        let lookLeft = yawDeg < 0 ? yawWeight : 0.0
+        let lookRight = yawDeg > 0 ? yawWeight : 0.0
+        let lookDown = pitchDeg < 0 ? pitchWeightDown : 0.0
+        let lookUp = pitchDeg > 0 ? pitchWeightUp : 0.0
+
+        vrm.setBlendShape(value: CGFloat(lookLeft), for: .custom("lookLeft"))
+        vrm.setBlendShape(value: CGFloat(lookRight), for: .custom("lookRight"))
+        vrm.setBlendShape(value: CGFloat(lookUp), for: .custom("lookUp"))
+        vrm.setBlendShape(value: CGFloat(lookDown), for: .custom("lookDown"))
     }
 
     func resetHeadNeckOrientation() {
-        lookAtHeadOffset = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        lookAtNeckOffset = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        applyCombinedRotations()
+        guard let vrm = vrmEntity else { return }
+        restoreRestOrientation(bone: .head, vrm: vrm)
+        restoreRestOrientation(bone: .neck, vrm: vrm)
     }
 
     func resetEyeOrientation() {
-        lookAtEyeOffset = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        applyCombinedRotations()
+        guard let vrm = vrmEntity else { return }
+        restoreRestOrientation(bone: .leftEye, vrm: vrm)
+        restoreRestOrientation(bone: .rightEye, vrm: vrm)
     }
 
     func isUsing180Rotation() -> Bool {
@@ -246,10 +341,70 @@ extension NativeVRMView {
     }
 
     func convertQuaternionFromJS(_ q: simd_quatf) -> simd_quatf {
-        // Since both RealityKit and Three.js apply the 180 root rotation to VRM 0.x
-        // and we compute the deltaQuat relative to T-Pose, we can just pass
-        // the rotation along perfectly mapped to identical coordinate spaces.
+        // RealityKit's coordinate system differs from Three.js/SceneKit along Z.
+        // However, we handle the root 180-degree rotation of VRM 0.x in applyModelOrientation(),
+        // so bone rotations from Three.js can be passed raw.
         return q
+    }
+
+    func cacheRestPose() {
+        restBoneOrientations.removeAll()
+        guard let vrm = vrmEntity else { return }
+        let bones: [Humanoid.Bones] = [
+            .hips, .spine, .neck, .head,
+            .leftShoulder, .rightShoulder,
+            .leftUpperArm, .rightUpperArm,
+            .leftLowerArm, .rightLowerArm,
+            .leftHand, .rightHand,
+            .leftThumbProximal, .leftThumbDistal,
+            .leftIndexProximal, .leftIndexIntermediate, .leftIndexDistal,
+            .leftMiddleProximal, .leftMiddleIntermediate, .leftMiddleDistal,
+            .leftRingProximal, .leftRingIntermediate, .leftRingDistal,
+            .leftLittleProximal, .leftLittleIntermediate, .leftLittleDistal,
+            .rightThumbProximal, .rightThumbDistal,
+            .rightIndexProximal, .rightIndexIntermediate, .rightIndexDistal,
+            .rightMiddleProximal, .rightMiddleIntermediate, .rightMiddleDistal,
+            .rightRingProximal, .rightRingIntermediate, .rightRingDistal,
+            .rightLittleProximal, .rightLittleIntermediate, .rightLittleDistal,
+            .leftUpperLeg, .rightUpperLeg,
+            .leftLowerLeg, .rightLowerLeg,
+            .leftFoot, .rightFoot,
+            .leftEye, .rightEye,
+            .upperChest,
+            .leftThumbProximal, .leftThumbDistal,
+            .leftIndexProximal, .leftIndexIntermediate, .leftIndexDistal,
+            .leftMiddleProximal, .leftMiddleIntermediate, .leftMiddleDistal,
+            .leftRingProximal, .leftRingIntermediate, .leftRingDistal,
+            .leftLittleProximal, .leftLittleIntermediate, .leftLittleDistal,
+            .rightThumbProximal, .rightThumbDistal,
+            .rightIndexProximal, .rightIndexIntermediate, .rightIndexDistal,
+            .rightMiddleProximal, .rightMiddleIntermediate, .rightMiddleDistal,
+            .rightRingProximal, .rightRingIntermediate, .rightRingDistal,
+            .rightLittleProximal, .rightLittleIntermediate, .rightLittleDistal
+        ]
+        for bone in bones {
+            if let node = vrm.humanoid.node(for: bone) {
+                restBoneOrientations[bone] = node.orientation
+            }
+        }
+    }
+
+    func applyDeltaOrientation(bone: Humanoid.Bones, delta: simd_quatf, vrm: VRMEntity) {
+        guard let node = vrm.humanoid.node(for: bone) else { return }
+        if let rest = restBoneOrientations[bone] {
+            node.orientation = rest * delta
+        } else {
+            node.orientation = delta
+        }
+    }
+
+    func restoreRestOrientation(bone: Humanoid.Bones, vrm: VRMEntity) {
+        guard let node = vrm.humanoid.node(for: bone) else { return }
+        if let rest = restBoneOrientations[bone] {
+            node.orientation = rest
+        } else {
+            node.orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        }
     }
 
     func applyModelOrientation() {

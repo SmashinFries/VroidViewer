@@ -93,11 +93,62 @@ extension NativeVRMView {
 
         applyModelVisibility()
         applyModelOrientation()
+        
+        // Cache the T-Pose before any animations/tracking are applied
+        cacheRestPose()
+        
         applyExpressions()
         applyBoneRotations()
         
-        // Apply MToon Materials
-        applyMToonMaterials(to: entity.entity, vrm: vrm)
+        // Clear and populate material configs
+        mtoonMaterialsByName.removeAll()
+        vrm0MaterialsByName.removeAll()
+
+        for prop in vrm.materialProperties {
+            let name = prop.name.lowercased()
+            
+            // Build VRM0 config
+            var v0 = VRM0MaterialConfig(shader: prop.shader)
+            if let floats = prop.floatProperties as? [String: Any] {
+                for (k, v) in floats {
+                    if let f = v as? Double { v0.floatProps[k] = Float(f) }
+                    else if let f = v as? Float { v0.floatProps[k] = f }
+                }
+            }
+            if let vectors = prop.vectorProperties as? [String: Any] {
+                for (k, v) in vectors {
+                    if let arr = v as? [Double], arr.count >= 4 { v0.vectorProps[k] = arr.map { Float($0) } }
+                    else if let arr = v as? [Float], arr.count >= 4 { v0.vectorProps[k] = arr }
+                }
+            }
+            if let keywords = prop.keywordMap as? [String: Bool] {
+                v0.keywordMap = keywords
+            }
+            vrm0MaterialsByName[name] = v0
+            
+            // Build MToon config (compatible with both 0.x and 1.x logic in newer Materials.swift)
+            if prop.shader.lowercased().contains("mtoon") {
+                let doubleSided = (v0.floatProps["_CullMode"] ?? 2.0) <= 0.5
+                let shadeArr = v0.vectorProps["_ShadeColor"]
+                let shadeColor = shadeArr != nil && shadeArr!.count >= 4 ? SIMD4<Float>(shadeArr![0], shadeArr![1], shadeArr![2], shadeArr![3]) : nil
+                
+                let config = MToonMaterialConfig(
+                    doubleSided: doubleSided,
+                    shadeColor: shadeColor,
+                    shadingToony: v0.floatProps["_ShadingToonyFactor"] ?? v0.floatProps["_ShadingToony"] ?? 0.0,
+                    shadingShift: v0.floatProps["_ShadingShiftFactor"] ?? v0.floatProps["_ShadingShift"] ?? 0.0
+                )
+                mtoonMaterialsByName[name] = config
+            }
+        }
+
+        // Apply new material fixes
+        applyVRM0MaterialsIfNeeded()
+        applyMToonMaterialsIfNeeded()
+        fixEyeMaterialsIfNeeded()
+        
+        // Initialize spring bones (physics)
+        configureSpringBones(vrm: vrm)
         
         applyModelVisibility()
 
@@ -117,6 +168,4 @@ extension NativeVRMView {
     func applyModelVisibility() {
         vrmEntity?.entity.isEnabled = showModel
     }
-
-
 }
