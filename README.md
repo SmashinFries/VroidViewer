@@ -96,7 +96,7 @@ To support models with varying rest poses (T-Pose vs. A-Pose), we send **Relativ
 ## Proof of Concept - LipSync
 | Android (Filament) | iOS (RealityKit) |
 | :---: | :---: |
-| <video src="https://github.com/kevinliddel/VroidViewer/blob/b426e64048c7f33e46eb67c3f0b1132418debccc/assets/videos/Android-LipSync.mp4" width="300" controls/> | <video src="https://github.com/kevinliddel/VroidViewer/blob/b426e64048c7f33e46eb67c3f0b1132418debccc/assets/videos/iOS-LipSync.mp4" width="300" controls/> |
+| <video src="./assets/videos/Android-LipSync.mp4" controls/> | <video src="./assets/videos/iOS-LipSync.mp4" controls/> |
 
 ---
 
