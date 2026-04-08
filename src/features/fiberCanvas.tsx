@@ -444,6 +444,7 @@ export const FiberCanvas: React.FC<FiberCanvasProps> = ({ onPreviewPress }) => {
 						minAzimuthAngle={-Math.PI * 0.5}
 						maxAzimuthAngle={Math.PI * 0.5}
 						vrmVersion={vrmVersion}
+						nativeLipSyncEnabled={true}
 					/>
 				</View>
 			)}
@@ -494,7 +495,7 @@ export const FiberCanvas: React.FC<FiberCanvasProps> = ({ onPreviewPress }) => {
 				</View>
 			)}
 
-			<MenusContainer onPreviewPress={onPreviewPress} />
+			<MenusContainer onPreviewPress={onPreviewPress} onPlayVoice={(asset) => nativeViewRef.current?.playAudio(asset)} />
 			<ModelSelector />
 		</View>
 	);

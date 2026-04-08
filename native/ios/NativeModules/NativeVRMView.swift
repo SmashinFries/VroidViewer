@@ -4,6 +4,7 @@ import VRMKit
 import VRMRealityKit
 import React
 import Combine
+import AVFoundation
 
 @available(iOS 18.0, *)
 @objc(NativeVRMView)
@@ -43,8 +44,13 @@ class NativeVRMView: UIView {
     var lookAtInitialized: Bool = false
     var restBoneOrientations: [Humanoid.Bones: simd_quatf] = [:]
 
-    var nativeLipSyncEnabled: Bool = false
+    @objc var nativeLipSyncEnabled: Bool = false
     var visemeKeys: [String] = ["aa", "ih", "ou", "ee", "oh"]
+    
+    // Audio Playback for Lip Sync
+    private var audioPlayer: AVAudioPlayer?
+    private var currentRMS: Float = 0.0
+    private var smoothedRMS: Float = 0.0
 
     // MARK: - Reactive Props
 
@@ -179,6 +185,77 @@ class NativeVRMView: UIView {
             guard let self = self else { return }
             self.vrmEntity?.update(at: event.deltaTime)
             self.springBones?.update(deltaTime: Float(event.deltaTime))
+            self.applyNativeLipSyncFrame()
+        }
+    }
+
+    func playAudio(assetName: String) {
+        print("DEBUG: playAudio called with: \(assetName)")
+        
+        // Resolve URL
+        var finalUrl: URL?
+        if assetName.contains("://") {
+            finalUrl = URL(string: assetName)
+        } else if assetName.starts(with: "/") {
+            finalUrl = URL(fileURLWithPath: assetName)
+        } else {
+            let cleanName = assetName.replacingOccurrences(of: ".mp3", with: "")
+            finalUrl = Bundle.main.url(forResource: cleanName, withExtension: "mp3") ??
+                       Bundle.main.url(forResource: "assets/audios/\(cleanName)", withExtension: "mp3")
+        }
+        
+        guard let url = finalUrl else {
+            print("ERROR: Could not resolve audio URL for: \(assetName)")
+            return
+        }
+        
+        print("DEBUG: Resolved final audio URL: \(url)")
+        
+        do {
+            // Use .mixWithOthers so we coexist with RealityKit / ARKit audio session
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setActive(true)
+            print("DEBUG: AVAudioSession activated")
+            
+            audioPlayer?.stop()
+            audioPlayer = try AVAudioPlayer(contentsOf: url)
+            audioPlayer?.isMeteringEnabled = true  // required for averagePower metering
+            audioPlayer?.volume = 1.0
+            let started = audioPlayer?.play() ?? false
+            print("DEBUG: AVAudioPlayer.play() returned: \(started)")
+        } catch {
+            print("ERROR: Failed to play audio: \(error)")
+        }
+    }
+
+    func applyNativeLipSyncFrame() {
+        guard nativeLipSyncEnabled else { return }
+        
+        // Update metering if player is active
+        var rms: Float = 0.0
+        if let player = audioPlayer, player.isPlaying {
+            player.updateMeters()
+            // averagePower returns dB; convert to linear [0..1]
+            let dB = player.averagePower(forChannel: 0)
+            let minDb: Float = -60.0
+            rms = dB <= minDb ? 0.0 : pow(10.0, dB / 20.0)
+        }
+        
+        let noiseFloor: Float = 0.01
+        let gain: Float = 4.0
+        let smoothing: Float = 0.5
+        
+        let targetRMS = rms > noiseFloor ? min(1.0, (rms - noiseFloor) * gain) : 0.0
+        smoothedRMS = smoothedRMS + (targetRMS - smoothedRMS) * (1.0 - smoothing)
+        
+        // Drive visemes via VRMRealityKit setBlendShape
+        vrmEntity?.setBlendShape(value: CGFloat(smoothedRMS), for: .preset(.a))
+    }
+
+    @objc var nativeLipSyncEnabledProp: Bool = false {
+        didSet {
+            self.nativeLipSyncEnabled = nativeLipSyncEnabledProp
         }
     }
 

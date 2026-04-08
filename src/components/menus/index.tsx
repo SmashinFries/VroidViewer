@@ -5,12 +5,14 @@ import { MetaView } from './meta';
 import { SettingsView } from './settings';
 import { AnimationsView } from './animation';
 import { MixamoAnimationView } from './mixamo';
+import { VoiceView } from './voice';
 
 interface MenusContainerProps {
 	onPreviewPress: () => void;
+	onPlayVoice: (assetName: string) => void;
 }
 
-export const MenusContainer: React.FC<MenusContainerProps> = ({ onPreviewPress }) => {
+export const MenusContainer: React.FC<MenusContainerProps> = ({ onPreviewPress, onPlayVoice }) => {
 	const [isOpen, setIsOpen] = useState(false);
 	const [isSidebarOpen, setSidebarOpen] = useState(false);
 	const animation = useRef(new Animated.Value(0)).current;
@@ -61,6 +63,7 @@ export const MenusContainer: React.FC<MenusContainerProps> = ({ onPreviewPress }
 					pointerEvents={isOpen ? 'auto' : 'none'}
 				>
 					<MetaView />
+					<VoiceView onPlayVoice={onPlayVoice} />
 					<MixamoAnimationView />
 					<AnimationsView />
 					<SettingsView />

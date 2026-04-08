@@ -88,13 +88,23 @@ To support models with varying rest poses (T-Pose vs. A-Pose), we send **Relativ
 
 ---
 
-## Screenshots
+## Proof of Concept
 | Android (Filament) | iOS (RealityKit) |
 | :---: | :---: |
 | <img src="./assets/images/Native-Android.jpeg" width="300"/> | <img src="./assets/images/Native-iOS.jpeg" width="300"/> |
 
+## Proof of Concept - LipSync
+| Android (Filament) | iOS (RealityKit) |
+| :---: | :---: |
+| <video src="./assets/videos/Android-LipSync.mp4" width="300" autoplay loop/> | <video src="./assets/videos/iOS-LipSync.mp4" width="300" autoplay loop/> |
+
 ---
 
+## Credits
+- VRMKit package: [tattn](https://github.com/tattn/VRMKit)
+- Audio files: [Akira Hoshino](https://www.youtube.com/@akira_hosh)
+
+---
 ## Dev Setup
 1. Clone this repo.
 2. Run `bun i`.

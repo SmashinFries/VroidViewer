@@ -19,9 +19,19 @@ import com.google.android.filament.*
 import com.google.android.filament.android.DisplayHelper
 import com.google.android.filament.android.UiHelper
 import com.google.android.filament.gltfio.*
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.*
 
 private const val TAG = "NativeVrmView"
@@ -115,7 +125,8 @@ class NativeVrmView @JvmOverloads constructor(
     internal val vrm0MaterialsByName: MutableMap<String, VRM0MaterialConfig> = mutableMapOf()
     
     // Audio / Lip Sync state
-    internal var audioTrack: android.media.AudioTrack? = null
+    private var activeAudioThread: Thread? = null
+    private val isAudioPlaying = AtomicBoolean(false)
     internal var smoothedRms = 0f
     internal var currentVisemeValue = 0f
     internal val noiseFloor = 0.004f
@@ -340,6 +351,144 @@ class NativeVrmView @JvmOverloads constructor(
         }
     }
 
+    fun playAudio(uri: String) {
+        Log.d(TAG, "playAudio requested with URI: $uri")
+        // Stop current playback
+        isAudioPlaying.set(false)
+        activeAudioThread?.interrupt()
+        activeAudioThread = null
+
+        isAudioPlaying.set(true)
+        activeAudioThread = Thread {
+            try {
+                Log.d(TAG, "Audio thread starting for $uri")
+                val extractor = MediaExtractor()
+                
+                if (uri.startsWith("/") || uri.startsWith("file://")) {
+                    val path = uri.replace("file://", "")
+                    Log.d(TAG, "Loading from file path: $path")
+                    extractor.setDataSource(path)
+                } else {
+                    // Fallback for asset names
+                    val assetPath = if (uri.startsWith("audios/")) uri else "audios/$uri"
+                    Log.d(TAG, "Loading from assets: $assetPath")
+                    val afd = context.assets.openFd(assetPath)
+                    extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    afd.close()
+                }
+                
+                runAudioPlayback(extractor)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error playing audio: ${e.message}", e)
+            } finally {
+                Log.d(TAG, "Audio thread finishing")
+                isAudioPlaying.set(false)
+                smoothedRms = 0f
+            }
+        }.apply {
+            name = "AudioPlaybackThread"
+            start()
+        }
+    }
+
+    private fun stopAudio() {
+        isAudioPlaying.set(false)
+        activeAudioThread?.interrupt()
+        activeAudioThread = null
+        smoothedRms = 0f
+    }
+
+    private fun runAudioPlayback(extractor: MediaExtractor) {
+        var trackIndex = -1
+        for (i in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME)
+            if (mime?.startsWith("audio/") == true) {
+                trackIndex = i
+                extractor.selectTrack(i)
+                break
+            }
+        }
+
+        if (trackIndex < 0) return
+
+        val format = extractor.getTrackFormat(trackIndex)
+        val mime = format.getString(MediaFormat.KEY_MIME) ?: return
+        val codec = MediaCodec.createDecoderByType(mime)
+        codec.configure(format, null, null, 0)
+        codec.start()
+
+        val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        val channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+        val channelConfig = if (channelCount == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
+        
+        val bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, AudioFormat.ENCODING_PCM_16BIT)
+        val audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build())
+            .setAudioFormat(AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(sampleRate)
+                .setChannelMask(channelConfig)
+                .build())
+            .setBufferSizeInBytes(bufferSize)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
+        audioTrack.play()
+
+        val info = MediaCodec.BufferInfo()
+        var sawInputEOS = false
+        
+        while (isAudioPlaying.get()) {
+            if (!sawInputEOS) {
+                val inputIndex = codec.dequeueInputBuffer(10000)
+                if (inputIndex >= 0) {
+                    val inputBuffer = codec.getInputBuffer(inputIndex)!!
+                    val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                    if (sampleSize < 0) {
+                        codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        sawInputEOS = true
+                    } else {
+                        codec.queueInputBuffer(inputIndex, 0, sampleSize, extractor.sampleTime, 0)
+                        extractor.advance()
+                    }
+                }
+            }
+
+            val outputIndex = codec.dequeueOutputBuffer(info, 10000)
+            if (outputIndex >= 0) {
+                val outputBuffer = codec.getOutputBuffer(outputIndex)!!
+                val chunk = ByteArray(info.size)
+                outputBuffer.get(chunk)
+                outputBuffer.clear()
+
+                // Calculate RMS for Lip Sync
+                var sum = 0.0
+                val shortBuffer = ByteBuffer.wrap(chunk).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                while (shortBuffer.hasRemaining()) {
+                    val sample = shortBuffer.get().toInt()
+                    sum += (sample * sample).toDouble()
+                }
+                val rms = sqrt(sum / (chunk.size / 2)).toFloat() / 32768f
+                smoothedRms = rms
+
+                audioTrack.write(chunk, 0, chunk.size)
+                codec.releaseOutputBuffer(outputIndex, false)
+
+                if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+            }
+        }
+
+        audioTrack.stop()
+        audioTrack.release()
+        codec.stop()
+        codec.release()
+        extractor.release()
+    }
+
     internal fun cacheEntities() {
         val model = asset ?: return
         boneEntities.clear()
@@ -530,7 +679,7 @@ class NativeVrmView @JvmOverloads constructor(
 
     private fun enableShadowingOnView() {
         try {
-            val method = view.javaClass.getMethod("setShadowingEnabled", Boolean::class.javaPrimitiveType)
+            val method = view::class.java.getMethod("setShadowingEnabled", Boolean::class.javaPrimitiveType!!)
             method.invoke(view, true)
         } catch (t: Throwable) { }
     }
@@ -546,7 +695,7 @@ class NativeVrmView @JvmOverloads constructor(
 
     private fun setRenderableShadowFlag(methodName: String, instance: Int, enabled: Boolean) {
         try {
-            val method = renderableManager.javaClass.getMethod(methodName, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
+            val method = renderableManager::class.java.getMethod(methodName, Int::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!)
             method.invoke(renderableManager, instance, enabled)
         } catch (t: Throwable) { }
     }

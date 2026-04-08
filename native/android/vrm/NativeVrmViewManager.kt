@@ -100,4 +100,35 @@ class NativeVrmViewManager : SimpleViewManager<NativeVrmView>() {
     fun setEnableEyeLookAt(view: NativeVrmView, value: Boolean) {
         view.setEnableEyeLookAt(value)
     }
+
+    @ReactProp(name = "nativeLipSyncEnabled", defaultBoolean = false)
+    fun setNativeLipSyncEnabled(view: NativeVrmView, value: Boolean) {
+        view.nativeLipSyncEnabled = value
+    }
+
+    override fun getCommandsMap(): Map<String, Int> {
+        return mapOf("playAudio" to 1)
+    }
+
+    override fun receiveCommand(view: NativeVrmView, commandId: Int, args: ReadableArray?) {
+        when (commandId) {
+            1 -> {
+                val assetName = args?.getString(0)
+                if (assetName != null) {
+                    view.playAudio(assetName)
+                }
+            }
+        }
+    }
+
+    override fun receiveCommand(view: NativeVrmView, commandId: String?, args: ReadableArray?) {
+        when (commandId) {
+            "playAudio" -> {
+                val assetName = args?.getString(0)
+                if (assetName != null) {
+                    view.playAudio(assetName)
+                }
+            }
+        }
+    }
 }
