@@ -4,12 +4,11 @@
     "slug": "VroidViewer",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/VroidViewer.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
+      "image": "./assets/VRoid.png",
       "backgroundColor": "#ffffff"
     },
     "assetBundlePatterns": [
@@ -17,21 +16,26 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.dedicatus.VroidViewer"
+      "bundleIdentifier": "com.dedicatus.VroidViewer",
+	  "infoPlist": {
+		  "NSPhotoLibraryAddUsageDescription": "This app needs permission to save custom thumbnails.",
+		  "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to select a custom thumbnail."
+	  }
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/VroidViewer.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.dedicatus.VroidViewer"
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/VroidViewer.png",
       "bundler": "metro"
     },
     "plugins": [
-      "expo-asset"
+      "expo-asset",
+      "./plugins/withNativeRestore"
     ]
   }
 }

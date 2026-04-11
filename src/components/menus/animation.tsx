@@ -60,7 +60,7 @@ export const AnimationsView = () => {
 			onToggle={onModalToggle}
 			icon="videocam-outline"
 			containerStyle={{
-				minWidth: '35%',
+				minWidth: '45%',
 				backgroundColor: 'rgba(255,255,255,0.95)',
 				borderRadius: 16,
 				shadowColor: '#000',

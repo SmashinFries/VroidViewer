@@ -1,0 +1,134 @@
+package com.dedicatus.VroidViewer.vrm
+
+import com.facebook.react.uimanager.SimpleViewManager
+import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.annotations.ReactProp
+import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.ReadableMap
+
+class NativeVrmViewManager : SimpleViewManager<NativeVrmView>() {
+    override fun getName(): String = "NativeVRMView"
+
+    override fun createViewInstance(reactContext: ThemedReactContext): NativeVrmView {
+        return NativeVrmView(reactContext)
+    }
+
+    override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any>? {
+        return mutableMapOf(
+            "onModelLoaded" to mutableMapOf("registrationName" to "onModelLoaded")
+        )
+    }
+
+    @ReactProp(name = "modelUri")
+    fun setModelUri(view: NativeVrmView, uri: String?) {
+        view.setModelUri(uri)
+    }
+
+    @ReactProp(name = "showModel", defaultBoolean = false)
+    fun setShowModel(view: NativeVrmView, value: Boolean) {
+        view.setShowModel(value)
+    }
+
+    @ReactProp(name = "expressions")
+    fun setExpressions(view: NativeVrmView, value: ReadableMap?) {
+        view.setExpressions(value)
+    }
+
+    @ReactProp(name = "boneRotations")
+    fun setBoneRotations(view: NativeVrmView, value: ReadableMap?) {
+        view.setBoneRotations(value)
+    }
+
+    @ReactProp(name = "hiddenMeshes")
+    fun setHiddenMeshes(view: NativeVrmView, value: ReadableArray?) {
+        view.setHiddenMeshes(value)
+    }
+
+    @ReactProp(name = "vrmVersion")
+    fun setVrmVersion(view: NativeVrmView, value: String?) {
+        view.setVrmVersion(value)
+    }
+
+    @ReactProp(name = "minZoom", defaultFloat = 1.0f)
+    fun setMinZoom(view: NativeVrmView, value: Float) {
+        view.setMinZoom(value)
+    }
+
+    @ReactProp(name = "maxZoom", defaultFloat = 6.0f)
+    fun setMaxZoom(view: NativeVrmView, value: Float) {
+        view.setMaxZoom(value)
+    }
+
+    @ReactProp(name = "initialZoom", defaultFloat = 0.0f)
+    fun setInitialZoom(view: NativeVrmView, value: Float) {
+        if (value > 0f) {
+            view.setInitialZoom(value)
+        }
+    }
+
+    @ReactProp(name = "minPolarAngle", defaultFloat = 0.0f)
+    fun setMinPolarAngle(view: NativeVrmView, value: Float) {
+        view.setMinPolarAngle(value)
+    }
+
+    @ReactProp(name = "maxPolarAngle", defaultFloat = 0.0f)
+    fun setMaxPolarAngle(view: NativeVrmView, value: Float) {
+        view.setMaxPolarAngle(value)
+    }
+
+    @ReactProp(name = "minAzimuthAngle", defaultFloat = 0.0f)
+    fun setMinAzimuthAngle(view: NativeVrmView, value: Float) {
+        view.setMinAzimuthAngle(value)
+    }
+
+    @ReactProp(name = "maxAzimuthAngle", defaultFloat = 0.0f)
+    fun setMaxAzimuthAngle(view: NativeVrmView, value: Float) {
+        view.setMaxAzimuthAngle(value)
+    }
+
+    @ReactProp(name = "lookAtEnabled", defaultBoolean = false)
+    fun setLookAtEnabled(view: NativeVrmView, value: Boolean) {
+        view.setLookAtEnabled(value)
+    }
+
+    @ReactProp(name = "headTracker", defaultBoolean = false)
+    fun setHeadTracker(view: NativeVrmView, value: Boolean) {
+        view.setHeadTracker(value)
+    }
+
+    @ReactProp(name = "enableEyeLookAt", defaultBoolean = false)
+    fun setEnableEyeLookAt(view: NativeVrmView, value: Boolean) {
+        view.setEnableEyeLookAt(value)
+    }
+
+    @ReactProp(name = "nativeLipSyncEnabled", defaultBoolean = false)
+    fun setNativeLipSyncEnabled(view: NativeVrmView, value: Boolean) {
+        view.nativeLipSyncEnabled = value
+    }
+
+    override fun getCommandsMap(): Map<String, Int> {
+        return mapOf("playAudio" to 1)
+    }
+
+    override fun receiveCommand(view: NativeVrmView, commandId: Int, args: ReadableArray?) {
+        when (commandId) {
+            1 -> {
+                val assetName = args?.getString(0)
+                if (assetName != null) {
+                    view.playAudio(assetName)
+                }
+            }
+        }
+    }
+
+    override fun receiveCommand(view: NativeVrmView, commandId: String?, args: ReadableArray?) {
+        when (commandId) {
+            "playAudio" -> {
+                val assetName = args?.getString(0)
+                if (assetName != null) {
+                    view.playAudio(assetName)
+                }
+            }
+        }
+    }
+}

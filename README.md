@@ -1,72 +1,125 @@
 # VroidViewer
-A React Native demo of [three-vrm](https://github.com/pixiv/three-vrm).
+A React Native demo of [three-vrm](https://github.com/pixiv/three-vrm) with custom High-Performance Native Renderers.
 
 ### Platforms
-✅ Web  
-➖ Android and iOS - See the below issues.
+✅ **Web**: Three.js + three-vrm (Standard implementation)  
+✅ **Android**: Native renderer via **Filament + gltfio** (Android 12+)  
+✅ **iOS**: Native renderer via **VRMKit + RealityKit** (iOS 18+)
 
-## Android
-- You can see the result on an Android Emulator:
-  
-  <img src="./assets/images/Android_emulator.png" width="300"/>
+---
 
-The model is rendered correctly for **VRM1_Constraint_Twist_Sample.vrm**
+## Expo & Native Management (`withNativeRestore`)
 
-- As for any other models, we have issues with the textures.
-    - vrm 0.x models:
+Because this project uses **Expo Prebuild**, the `ios/` and `android/` folders are transient and can be regenerated at any time. To keep our custom native code persistent and manageable, we use a specialized Expo Plugin: `plugins/withNativeRestore.js`.
 
-      <img src="./assets/images/Android_issue_vrm0.png" width="300"/>
-    - vrm 1 models:
+### What it does:
+1.  **Code Synchronization**: It maintains a "Source of Truth" in the `/native` top-level directory.
+    - `native/android/vrm` ↔ `android/app/src/main/java/.../vrm`
+    - `native/ios/NativeModules` ↔ `ios/NativeModules`
+2.  **Automatic Injection**:
+    - **Android**: Automatically registers the `NativeVrmPackage` in `MainApplication.kt` and adds Filament/Kotlin-Math dependencies to `build.gradle`.
+    - **iOS**: Automatically registers all `.swift`, `.m`, and `.h` files from `NativeModules` into the Xcode PBXProject.
+3.  **Environment Setup**: Ensures the correct Android SDK path is configured in `local.properties`.
 
-      <img src="./assets/images/Android_issue_vrm1.png" width="300"/>
+---
 
-## iOS
-- As for the iOS, it was tested on a development build directly on a physical device (iPhone 11) and an iOS Simulator (iPhone 17 Pro Max):
+## How iOS Rendering Works
 
-  <img src="./assets/images/iOS_real_device.png" width="300"/>  <img src="./assets/images/iOS_simulator.png" width="300"/>
+The iOS renderer leverages **RealityKit**, Apple's high-performance AR/Rendering framework, wrapped by the **VRMKit** library.
 
-The model is also rendered correctly for **VRM1_Constraint_Twist_Sample.vrm**
+### Architecture
+- **Loader**: `ios/NativeModules/NativeVRMView.swift`
+- **Engine**: RealityKit (using physically based materials).
+- **VRM 1.x Compatibility**: Since VRMKit 0.7.1 is optimized for VRM 0.x, we use a **Metadata Shim** (in `VRMShimUtils.swift`) that intercept VRM 1.x models and injects a legacy VRM 0.x extension on-the-fly. This allows the RealityKit loader to recognize bone mappings and expressions for modern models.
 
-- Like with Android, we have issues with the textures on any other models.
-    - vrm 0.x models:
+### Key Logic:
+- **Y-Axis Correction**: VRM 0.x models are automatically rotated 180° to face the camera, matching the Three.js convention.
+- **Bone Mapping**: RealityKit entities are mapped to normalized humanoid bone names for consistent animation.
 
-      <img src="./assets/images/iOS_issue_vrm0.png" width="300"/>
-    - vrm 1 models:
+---
 
-      <img src="./assets/images/iOS_issue_vrm1.png" width="300"/>
+## How Android Rendering Works
 
-- For some reasons, the max texture size on iOS Simulator are "4096", and causes the model to display only after a while or not display at all
+The Android renderer uses **Google's Filament**, a real-time physically based rendering engine used in Google Search and Maps.
 
-## Known Mobile Issues
-- As you may have seen, The model **VRM1_Constraint_Twist_Sample** (named vrm1.vrm in this project) is the only model that renders correctly
-- The other models are lacking texture
-- GLTFLoader progress callback is ignored on mobile.
+### Architecture
+- **Loader**: Uses `gltfio` for efficient GLB parsing.
+- **Surface**: Renders into a `TextureView` via `UiHelper` and `SwapChain` for seamless integration with React Native.
+- **Render Loop**: Driven by a hardware-synced `Choreographer` callback.
 
-# To-Do
-- Add [WebGPU example](https://github.com/wcandillon/react-native-webgpu)
+### Custom VRM Implementation:
+- **MToon Approximation**: Filament's standard PBR materials are procedurally adjusted based on VRM metadata to simulate anime-style shading (setting `baseColorFactor`, `shadeColor`, and disabling culling for hair).
+- **Native Lip Sync**: Features a dedicated RMS-based audio analyzer that drives mouth morph targets directly on the GPU without JS overhead.
+- **Spring Bones**: A native Kotlin implementation of the VRM Spring Bone physics system handles hair and clothing movement.
 
+---
+
+## JS → Native Bridge (Animation Sync)
+
+Animations are computed in the Javascript thread using `three-vrm` to ensure logic parity across all platforms. The results are mirrored to the native renderers at 60fps.
+
+### Architecture
+```mermaid
+graph LR
+    subgraph "Javascript (Three.js)"
+        A[Animation Mixer] --> B[VRM Model]
+        B --> C[Bone Quaternions]
+        B --> D[Expression Weights]
+    end
+
+    subgraph "Bridge (Native Props)"
+        C --> E{Delta Calc}
+        D --> F[Direct Dispatch]
+    end
+
+    subgraph "Native (RealityKit / Filament)"
+        E --> G[Apply Humanoid Bones]
+        F --> H[Apply BlendShapes]
+        G --> I[Native Render]
+        H --> I
+    end
+```
+
+### 1. The Sync Loop
+Located in `src/features/fiberCanvas.tsx`, it uses a `requestAnimationFrame` loop to sample the JS model state and dispatch it to native views using `setNativeProps` for maximum performance, bypassing the standard React diffing cycle.
+
+### 2. Bone Rotation Deltas
+To support models with varying rest poses (T-Pose vs. A-Pose), we send **Relative Deltas** from the T-Pose rather than absolute rotations. The native logic applies these deltas to its own internal rest transform.
+
+---
+
+## Proof of Concept
+| Android (Filament) | iOS (RealityKit) |
+| :---: | :---: |
+| <img src="./assets/images/Native-Android.jpeg" width="300"/> | <img src="./assets/images/Native-iOS.jpeg" width="300"/> |
+
+## Proof of Concept - LipSync
+| Android (Filament) | iOS (RealityKit) |
+| :---: | :---: |
+| <video src="./assets/videos/Android-LipSync.mp4" controls/> | <video src="./assets/videos/iOS-LipSync.mp4" controls/> |
+
+---
+
+## Credits
+- VRMKit package: [tattn](https://github.com/tattn/VRMKit)
+- Audio files: [Akira Hoshino](https://www.youtube.com/@akira_hosh)
+
+---
 ## Dev Setup
-1. Clone this repo
-2. Run `bun i` in main directory
-3. Run `bun run start` to start dev server
+
+> **Note**: **JDK 21 is required** to build the Android project due to the Filament native renderer. Please ensure your `JAVA_HOME` or system environment is configured for JDK 21.
+
+1. Clone this repo.
+2. Run `bun i`.
+3. Run `npx expo prebuild` (to generate native folders and trigger the restore plugin).
+4. Run `npx expo run:android` or `npx expo run:ios`.
 
 ### Animations
-If you want to test the extra animations in the demo:
-
+To test the extra animations:
 1. Download the [motion pack](https://vroid.booth.pm/items/5512385).
-2. Extract and place the VRMA files in the assets/animations/motion_pack folder.
+2. Extract to `assets/animations/motion_pack`.
 
-### Mixamo Animations
-If you want to test the more animations, you can:
+---
 
-1. Go to [Mixamo](https://www.mixamo.com/):
-2. Choose an animation you like
-3. Download it as FBX without skin, with 30 fps
-   
-   <img src="./assets/images/Mixamo.png" width="300"/>
-
-This works with Expo Go 53, so building isn't required.
-
-
-If you wanna test on Expo Go for iOS, you'll need to update the package and migrate to expo SDK 54
-
+### IMPORTANT NOTE
+The `NativeVRMView` component **does not work in Expo Go**. You must use a Development Build or run via `npx expo run:[android|ios]`.
