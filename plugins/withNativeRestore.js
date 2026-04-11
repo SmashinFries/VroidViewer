@@ -65,21 +65,6 @@ function withNativeRestore(config) {
         }
       }
 
-      // Ensure gradle.properties has org.gradle.java.home set to JDK 21
-      const gradlePropsPath = path.join(rootDir, 'android/gradle.properties');
-      if (fs.existsSync(gradlePropsPath)) {
-        let gradleProps = fs.readFileSync(gradlePropsPath, 'utf8');
-        const jdk21Path = '/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home';
-        if (!gradleProps.includes('org.gradle.java.home=')) {
-          console.log('[withNativeRestore] Adding org.gradle.java.home to gradle.properties...');
-          gradleProps = gradleProps.replace(
-            'org.gradle.jvmargs=',
-            `org.gradle.java.home=${jdk21Path}\norg.gradle.jvmargs=`
-          );
-          fs.writeFileSync(gradlePropsPath, gradleProps);
-        }
-      }
-
       // Ensure local.properties has sdk.dir pointing to Android SDK
       const localPropsPath = path.join(rootDir, 'android/local.properties');
       const androidSdkPath = process.env.ANDROID_HOME

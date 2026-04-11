@@ -19,7 +19,7 @@ Because this project uses **Expo Prebuild**, the `ios/` and `android/` folders a
 2.  **Automatic Injection**:
     - **Android**: Automatically registers the `NativeVrmPackage` in `MainApplication.kt` and adds Filament/Kotlin-Math dependencies to `build.gradle`.
     - **iOS**: Automatically registers all `.swift`, `.m`, and `.h` files from `NativeModules` into the Xcode PBXProject.
-3.  **Environment Setup**: Ensures the correct JDK (21+) and Android SDK paths are configured in `gradle.properties` and `local.properties`.
+3.  **Environment Setup**: Ensures the correct Android SDK path is configured in `local.properties`.
 
 ---
 
@@ -106,6 +106,9 @@ To support models with varying rest poses (T-Pose vs. A-Pose), we send **Relativ
 
 ---
 ## Dev Setup
+
+> **Note**: **JDK 21 is required** to build the Android project due to the Filament native renderer. Please ensure your `JAVA_HOME` or system environment is configured for JDK 21.
+
 1. Clone this repo.
 2. Run `bun i`.
 3. Run `npx expo prebuild` (to generate native folders and trigger the restore plugin).

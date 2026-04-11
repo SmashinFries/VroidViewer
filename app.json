@@ -8,7 +8,7 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/Vroid.png",
+      "image": "./assets/VRoid.png",
       "backgroundColor": "#ffffff"
     },
     "assetBundlePatterns": [
